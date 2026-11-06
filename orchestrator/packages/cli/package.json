@@ -1,0 +1,28 @@
+{
+  "name": "@neo-astra/cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "astra": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@neo-astra/codegen-js": "1.0.0",
+    "@neo-astra/codegen-ts": "1.0.0",
+    "@neo-astra/compiler-client": "1.0.0",
+    "@neo-astra/manifest": "1.0.0",
+    "@neo-astra/toolchain": "1.0.0"
+  }
+}

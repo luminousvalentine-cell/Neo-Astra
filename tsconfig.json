@@ -1,0 +1,16 @@
+{
+  "files": [],
+  "references": [
+    { "path": "orchestrator/packages/compiler-client" },
+    { "path": "orchestrator/packages/manifest" },
+    { "path": "orchestrator/packages/registry" },
+    { "path": "orchestrator/packages/nopm" },
+    { "path": "orchestrator/packages/plugins" },
+    { "path": "orchestrator/packages/codegen-js" },
+    { "path": "orchestrator/packages/codegen-ts" },
+    { "path": "orchestrator/packages/playground" },
+    { "path": "orchestrator/packages/nopm" },
+    { "path": "orchestrator/packages/cli" },
+    { "path": "orchestrator/packages/toolchain" }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@neo-astra/nopm",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "nopm": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@neo-astra/manifest": "1.0.0",
+    "@neo-astra/toolchain": "1.0.0",
+    "@neo-astra/registry": "1.0.0"
+  }
+}

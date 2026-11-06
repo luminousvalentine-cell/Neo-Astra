@@ -1,0 +1,18 @@
+{
+  "name": "@neo-astra/playground",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/bridge.js",
+  "types": "./dist/bridge.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/bridge.d.ts",
+      "default": "./dist/bridge.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  }
+}
