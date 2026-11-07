@@ -35,7 +35,6 @@ mod wasm {
         let input = if pointer.is_null() || len == 0 {
             String::new()
         } else {
-
             let bytes = unsafe { slice::from_raw_parts(pointer, len) };
             String::from_utf8_lossy(bytes).into_owned()
         };

@@ -27,7 +27,6 @@ pub struct SourceUnit {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum IntegerPolicy {
-
     #[default]
     Wrapping,
 
@@ -39,7 +38,6 @@ pub enum IntegerPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleIr {
-
     pub key: String,
 
     pub path: String,
@@ -83,7 +81,6 @@ pub struct CompileResponse {
 }
 
 impl CompileResponse {
-
     #[must_use]
     pub fn success(program: Program) -> Self {
         Self {
@@ -136,7 +133,6 @@ pub struct FormatResponse {
 }
 
 impl FormatResponse {
-
     #[must_use]
     pub fn success(source: String) -> Self {
         Self {
@@ -167,7 +163,6 @@ pub struct AstResponse {
 }
 
 impl AstResponse {
-
     #[must_use]
     pub fn success(ast: astra_core::ast::Module) -> Self {
         Self {
@@ -202,7 +197,6 @@ pub struct ExplainResponse {
 }
 
 impl ExplainResponse {
-
     #[must_use]
     pub fn success(inference: ModeInference) -> Self {
         let explanation = inference.explain();
@@ -233,7 +227,6 @@ fn module_stem(path: &str) -> &str {
 }
 
 pub trait CompilerApi {
-
     fn check(&self, request: &CompileRequest) -> CompileResponse;
 }
 
@@ -255,7 +248,6 @@ pub struct ProjectCheckRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSourceUnit {
-
     pub key: String,
 
     pub path: String,
@@ -731,7 +723,6 @@ pub fn compile_project(request: &ProjectCompileRequest) -> ProjectCompileRespons
             let mut modules = Vec::new();
             let mut host_shim = String::new();
             for (entry, module_out) in entries.iter().zip(generated.iter()) {
-
                 let stem = entry
                     .key
                     .strip_suffix(".ns")
@@ -787,7 +778,6 @@ pub fn compile_project(request: &ProjectCompileRequest) -> ProjectCompileRespons
 pub struct FrontendCompiler;
 
 impl FrontendCompiler {
-
     #[must_use]
     pub fn compile(&self, request: &CompileRequest) -> CompileResponse {
         if !matches!(request.target.as_str(), "js" | "ts" | "c") {

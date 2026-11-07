@@ -64,7 +64,7 @@ const repository = {
 };
 const common = {
   version,
-  license: "MIT",
+  license: "Apache-2.0",
   repository,
   homepage: "https://github.com/luminousvalentine-cell/Neo-Astra#readme",
   bugs: {

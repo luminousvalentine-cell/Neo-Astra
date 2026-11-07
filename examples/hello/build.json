@@ -1,0 +1,4 @@
+{
+  "build": { "defaultTarget": "native", "defaultMode": "core" },
+  "nova": { "entry": "src/main.ns" }
+}

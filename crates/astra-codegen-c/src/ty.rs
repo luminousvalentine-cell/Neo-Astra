@@ -53,7 +53,6 @@ pub struct TypeEnv {
 }
 
 impl TypeEnv {
-
     pub fn collect(module: &ast::Module) -> Self {
         let mut decls = BTreeMap::new();
         for item in &module.items {
@@ -77,7 +76,6 @@ impl TypeEnv {
 
 #[derive(Debug, Clone)]
 pub struct ForeignDecl {
-
     pub stem: String,
 
     pub local: String,
@@ -86,7 +84,6 @@ pub struct ForeignDecl {
 
 #[derive(Debug, Clone)]
 pub struct Nominal {
-
     pub prefix: String,
 
     pub source: String,
@@ -245,7 +242,6 @@ pub struct TyCtxt {
 }
 
 impl TyCtxt {
-
     pub fn new(env: TypeEnv) -> Self {
         Self {
             env,
@@ -434,7 +430,6 @@ impl TyCtxt {
             }
             Type::Function(_) => "Fn".into(),
             Type::Named(name, args) => {
-
                 let base = match self.nominal(name) {
                     Some(nominal) => format!("{}{}", nominal.prefix, sanitize(&nominal.source)),
 
@@ -549,13 +544,11 @@ impl TyCtxt {
 
             Type::Named(name, _) if name == "Region" => "NS_Region*".into(),
             Type::Named(name, args) if name == "Ptr" => {
-
                 let inner = args.first().cloned().unwrap_or(Type::U8);
                 let value = self.c_type(&inner);
                 format!("{value}*")
             }
             Type::Named(name, args) if name == "Task" => {
-
                 let inner = args.first().cloned().unwrap_or(Type::Unit);
                 let struct_name = self.task_struct_ref(&inner);
                 format!("{struct_name}*")
@@ -663,7 +656,6 @@ impl TyCtxt {
                 )
             }
             Type::Option(inner) => {
-
                 let c = self.c_type(ty);
                 let inner_shape = self.shape_ref(inner);
                 let payload = if inner_shape == "&NS_SHAPE_LEAF" {
@@ -674,7 +666,6 @@ impl TyCtxt {
                 self.variant_shape(&c, &[payload, "NULL".to_owned()])
             }
             Type::Result(ok, error) => {
-
                 let c = self.c_type(ty);
                 let error_shape = self.shape_ref(error);
                 let error_payload = if error_shape == "&NS_SHAPE_LEAF" {
@@ -691,14 +682,10 @@ impl TyCtxt {
                 self.variant_shape(&c, &[error_payload, ok_payload])
             }
             Type::Named(name, args) => match name.as_str() {
-
                 "Ptr" | "Region" => "&NS_SHAPE_LEAF".to_owned(),
 
                 "Channel" => "&NS_SHAPE_LEAF".to_owned(),
-                "Task" => {
-
-                    self.record_shape("{ 0, &NS_SHAPE_LEAF }", 1)
-                }
+                "Task" => self.record_shape("{ 0, &NS_SHAPE_LEAF }", 1),
 
                 "SliceError" | "ParseIntError" | "OverflowError" | "TaskError" => {
                     let c = self.c_type(ty);
@@ -706,7 +693,6 @@ impl TyCtxt {
                 }
                 _ => {
                     if !args.is_empty() {
-
                         return "&NS_SHAPE_LEAF".to_owned();
                     }
                     match self.env.shape(name).cloned() {
@@ -915,7 +901,6 @@ impl TyCtxt {
 
         let owned = match self.env.shape(name) {
             None => {
-
                 if let Some(builtin) = builtin_nominal(name) {
                     return format!("NS_{builtin}");
                 }
@@ -986,7 +971,6 @@ pub struct Annotations {
 }
 
 impl Annotations {
-
     pub fn new(annotations: &[astra_core::checker::TypeAnnotation]) -> Self {
         let mut by_span = BTreeMap::new();
         for ann in annotations {

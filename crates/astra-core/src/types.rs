@@ -46,7 +46,6 @@ pub struct FunctionType {
 }
 
 impl Type {
-
     #[must_use]
     pub const fn unit() -> Self {
         Self::Unit

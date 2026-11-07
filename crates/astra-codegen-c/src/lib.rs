@@ -7,7 +7,6 @@ pub const TARGET: &str = "c";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum IntegerPolicy {
-
     #[default]
     Wrapping,
 
@@ -18,7 +17,6 @@ pub enum IntegerPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CModule {
-
     pub name: String,
 
     pub ast: astra_core::ast::Module,
@@ -34,14 +32,12 @@ pub struct CModule {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendError {
-
     pub code: String,
 
     pub message: String,
 }
 
 impl BackendError {
-
     #[must_use]
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
@@ -58,7 +54,6 @@ impl BackendError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedC {
-
     pub source: String,
 
     pub header: Option<String>,
@@ -90,7 +85,6 @@ fn strip_generated(mut generated: GeneratedC) -> GeneratedC {
 
 #[derive(Debug, Clone)]
 pub struct ProjectEntry {
-
     pub module: CModule,
 
     pub key: String,
@@ -100,7 +94,6 @@ pub struct ProjectEntry {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EmitKind {
-
     #[default]
     Executable,
 

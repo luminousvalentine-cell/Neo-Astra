@@ -18,7 +18,6 @@ use crate::value::{
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum IntegerPolicy {
-
     #[default]
     Wrapping,
 
@@ -27,7 +26,6 @@ pub enum IntegerPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NovaOptions {
-
     pub mode: Mode,
 
     pub infer_mode: bool,
@@ -254,7 +252,6 @@ macro_rules! eval_value {
 }
 
 impl Interpreter {
-
     pub fn new(
         checked: CheckResult,
         options: NovaOptions,

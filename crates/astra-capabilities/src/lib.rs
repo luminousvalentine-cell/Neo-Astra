@@ -18,7 +18,6 @@ pub const CAPABILITY_REQUIREMENT: &str = "NS5003";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ModeReasonKind {
-
     ExplicitRequirement,
 
     CapabilityTag,
@@ -39,7 +38,6 @@ pub enum ModeReasonKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModeReason {
-
     pub mode: Mode,
 
     pub kind: ModeReasonKind,
@@ -84,7 +82,6 @@ impl ModeReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModeInference {
-
     pub required_mode: Mode,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,7 +98,6 @@ pub struct ModeInference {
 }
 
 impl ModeInference {
-
     #[must_use]
     pub fn new() -> Self {
         Self {

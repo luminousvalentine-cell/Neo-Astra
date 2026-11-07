@@ -32,7 +32,6 @@ pub struct Attribute {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExportAsAttribute {
-
     pub symbol: String,
 
     pub bindings: Vec<(String, Type)>,

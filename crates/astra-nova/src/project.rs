@@ -27,7 +27,6 @@ use Diagnostic as CoreDiagnostic;
 pub struct ModuleId(String);
 
 impl ModuleId {
-
     pub fn parse(value: impl Into<String>) -> Result<Self, ProjectError> {
         let value = value.into();
         let id = Self(value.clone());
@@ -84,7 +83,6 @@ impl fmt::Display for ModuleId {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectDiagnostic {
-
     pub module: ModuleId,
 
     pub path: PathBuf,
@@ -94,7 +92,6 @@ pub struct ProjectDiagnostic {
 
 #[derive(Debug, Clone)]
 pub struct Project {
-
     pub root: PathBuf,
 
     pub entry: ModuleId,
@@ -125,7 +122,6 @@ pub struct ProjectOptions {
 
 #[derive(Debug, Clone)]
 pub enum ProjectError {
-
     Diagnostics(Vec<ProjectDiagnostic>),
 
     Runtime {
@@ -134,11 +130,13 @@ pub enum ProjectError {
         error: Box<NovaError>,
     },
 
-    InvalidModule { id: String, message: String },
+    InvalidModule {
+        id: String,
+        message: String,
+    },
 }
 
 impl ProjectError {
-
     #[must_use]
     pub fn diagnostics(&self) -> &[ProjectDiagnostic] {
         match self {

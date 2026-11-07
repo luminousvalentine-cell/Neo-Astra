@@ -11,6 +11,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "astra-cli"
+version = "1.0.0"
+dependencies = [
+ "astra-capabilities",
+ "astra-compiler-api",
+ "astra-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "astra-codegen-c"
 version = "1.0.0"
 dependencies = [
@@ -37,6 +48,17 @@ version = "1.0.0"
 dependencies = [
  "serde",
  "unicode-ident",
+]
+
+[[package]]
+name = "astra-lsp"
+version = "1.0.0"
+dependencies = [
+ "astra-capabilities",
+ "astra-compiler-api",
+ "astra-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

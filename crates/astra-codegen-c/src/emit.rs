@@ -431,7 +431,6 @@ fn prescan(tcx: &mut TyCtxt, module: &CModule) {
         }
     }
     for ann in &module.annotations {
-
         if !mentions_unresolved(&ann.ty) {
             let _ = tcx.c_type(&ann.ty);
         }
@@ -490,7 +489,6 @@ fn collect_scripts(items: &[ast::Item], scripts: &mut Vec<ast::ScriptBlock>) {
 }
 
 fn prescan_fn(tcx: &mut TyCtxt, f: &ast::FunctionDecl) {
-
     if !f.type_parameters.is_empty() {
         return;
     }
@@ -598,7 +596,6 @@ struct Instantiation {
 }
 
 impl<'a> Emitter<'a> {
-
     fn fn_symbol(&self, name: &str) -> String {
         format!("ns_{}{}", self.prefix, sanitize(name))
     }
@@ -916,7 +913,6 @@ impl<'a> Emitter<'a> {
         let exported_fns: Vec<_> = fns
             .iter()
             .filter(|f| {
-
                 self.module
                     .hir
                     .items
@@ -978,7 +974,6 @@ impl<'a> Emitter<'a> {
         for item in items {
             match &item.kind {
                 ast::ItemKind::Function(f) => {
-
                     if f.type_parameters.is_empty() {
                         fns.push(f.clone());
                     }
@@ -1029,7 +1024,6 @@ impl<'a> Emitter<'a> {
 
     fn emit_fn_proto(&mut self, f: &ast::FunctionDecl) {
         if !f.type_parameters.is_empty() {
-
             return;
         }
         let sym = self.fn_symbol(&f.name);
@@ -1040,7 +1034,6 @@ impl<'a> Emitter<'a> {
         let (ret_c, _is_fallible) = self.fn_return_c(f);
         let params = self.fn_params_c(f);
         if self.linked {
-
             let _ = writeln!(self.out, "{ret_c} {sym}({params});");
         } else {
             let _ = writeln!(self.out, "static {ret_c} {sym}({params});");
@@ -1248,7 +1241,6 @@ impl<'a> Emitter<'a> {
             ExprKind::Call { callee, arguments } => {
                 self.count_expr_slots(callee, total);
                 for argument in arguments {
-
                     let ty = self.type_of(argument).cloned().unwrap_or(Type::Unit);
                     *total += self.tcx.root_slot_count(&ty);
                     self.count_expr_slots(argument, total);
@@ -1263,7 +1255,6 @@ impl<'a> Emitter<'a> {
             }
             ExprKind::Array(items) | ExprKind::Tuple(items) => {
                 for item in items {
-
                     let ty = self.type_of(item).cloned().unwrap_or(Type::Unit);
                     *total += self.tcx.root_slot_count(&ty);
                     self.count_expr_slots(item, total);
@@ -1320,7 +1311,6 @@ impl<'a> Emitter<'a> {
                 }
             }
             ExprKind::Spawn { body: _ } => {
-
                 let task_ty = self
                     .type_of(e)
                     .cloned()
@@ -1713,7 +1703,6 @@ impl<'a> Emitter<'a> {
         if is_fn_body && block.statements.is_empty() {
             self.emit_implicit_tail_return(is_fallible);
         } else if !is_fn_body {
-
             self.emit_scope_task_joins();
             self.emit_scope_defers();
             self.emit_scope_task_joins();
@@ -1744,7 +1733,6 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_tail_expr(&mut self, e: &Expr, is_fallible: bool) {
-
         if self.all_branches_return(e) {
             self.emit_expr_stmt(e);
             return;
@@ -1805,7 +1793,6 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_all_defers(&mut self) {
-
         self.emit_all_task_joins();
         let all: Vec<ast::Stmt> = self
             .defers
@@ -2360,7 +2347,6 @@ impl<'a> Emitter<'a> {
     }
 
     fn identifier_c(&mut self, name: &str, _e: &Expr) -> String {
-
         if name == "None"
             && let Some(expected @ Type::Option(_)) = self.expected.clone()
         {
@@ -2412,7 +2398,6 @@ impl<'a> Emitter<'a> {
 
     fn binary_c(&mut self, op: BinaryOp, left: &Expr, right: &Expr, _e: &Expr) -> String {
         if matches!(op, BinaryOp::And | BinaryOp::Or) {
-
             let l = self.materialize(left);
             let saved = self.hoist;
             self.hoist = false;
@@ -2554,7 +2539,6 @@ impl<'a> Emitter<'a> {
     }
 
     fn assign_c(&mut self, target: &Expr, value: &Expr) -> String {
-
         if let ExprKind::Index {
             target: buffer,
             index,
@@ -2643,7 +2627,6 @@ impl<'a> Emitter<'a> {
     }
 
     fn call_c(&mut self, callee: &Expr, args: &[Expr], e: &Expr) -> String {
-
         let callee = match &callee.kind {
             ExprKind::TypeArguments { target, .. } => target.as_ref(),
             _ => callee,
@@ -2763,7 +2746,6 @@ impl<'a> Emitter<'a> {
                             return format!("astra_region_new((size_t)({bytes}))");
                         }
                         _ => {
-
                             if let Some(dep_key) = self.namespaces.get(owner).cloned() {
                                 let arg_c = self.args_c(args);
                                 let dep_stem = module_key_stem(&dep_key);
@@ -2775,7 +2757,6 @@ impl<'a> Emitter<'a> {
                             }
 
                             if self.scripts.iter().any(|s| s.name == *owner) {
-
                                 let arg_strs: Vec<String> =
                                     args.iter().map(|a| self.materialize(a)).collect();
                                 let arg_c = arg_strs.join(", ");
@@ -2860,7 +2841,6 @@ impl<'a> Emitter<'a> {
             return self.expr(e);
         };
         if self.tcx.root_slot_count(&ty) == 0 {
-
             let side_effecting = matches!(
                 e.kind,
                 ExprKind::Call { .. }
@@ -3165,7 +3145,6 @@ impl<'a> Emitter<'a> {
                 )
             }
             (Some(Type::Array(_) | Type::Slice(_)), "get") => {
-
                 let elem_ty = self.elem_type_of(receiver);
                 let elem_c = self.tcx.c_type(&elem_ty);
                 let arr_ty = self
@@ -3263,7 +3242,6 @@ impl<'a> Emitter<'a> {
                 format!("{tmp}.error")
             }
             (Some(Type::Str), "slice") => {
-
                 let r = self.expr(receiver);
                 let start = args
                     .first()
@@ -3293,7 +3271,6 @@ impl<'a> Emitter<'a> {
                 res
             }
             (Some(Type::Str), "to_int") => {
-
                 let r = self.expr(receiver);
                 let source = self.fresh_id("intsrc");
                 let value = self.fresh_id("intval");
@@ -3317,7 +3294,6 @@ impl<'a> Emitter<'a> {
                 res
             }
             (Some(Type::Str), "byte_at") => {
-
                 let r = self.expr(receiver);
                 let index = args
                     .first()
@@ -3336,7 +3312,6 @@ impl<'a> Emitter<'a> {
                 res
             }
             (Some(Type::Str), "char_at") => {
-
                 let r = self.expr(receiver);
                 let index = args
                     .first()
@@ -3375,7 +3350,6 @@ impl<'a> Emitter<'a> {
             }
             (None, "new") if matches!(&receiver.kind, ExprKind::Identifier(name) if name == "bytes") =>
             {
-
                 let length = args
                     .first()
                     .map(|a| self.expr(a))
@@ -3391,7 +3365,6 @@ impl<'a> Emitter<'a> {
                 format!("(({r}).len == 0)")
             }
             (Some(Type::Bytes), "slice") => {
-
                 let r = self.expr(receiver);
                 let start = args
                     .first()
@@ -3570,7 +3543,6 @@ impl<'a> Emitter<'a> {
     }
 
     fn member_c(&mut self, target: &Expr, member: &str, e: &Expr) -> String {
-
         if let ExprKind::Identifier(owner) = &target.kind
             && let Some(shape) = self.tcx.enum_shape(owner)
             && shape.variants.iter().any(|v| v.name == member)
@@ -3594,7 +3566,6 @@ impl<'a> Emitter<'a> {
                 format!("({t}).{m}", m = field_c(member))
             }
             Some(Type::Tuple(_)) => {
-
                 if let Ok(idx) = member.parse::<usize>() {
                     return format!("({t})._{idx}");
                 }
@@ -3696,7 +3667,6 @@ impl<'a> Emitter<'a> {
     }
 
     fn struct_init_c(&mut self, path: &ast::TypePath, fields: &[ast::FieldInit]) -> String {
-
         let name = path.segments.join(".");
         let ty_c = self.tcx.c_type(&Type::Named(name.clone(), Vec::new()));
         let Some(shape) = self.tcx.struct_shape(&name) else {
@@ -3706,7 +3676,6 @@ impl<'a> Emitter<'a> {
             return format!("({ty_c}){{0}}");
         };
         if shape.tuple {
-
             let vals: Vec<String> = fields.iter().map(|f| self.materialize(&f.value)).collect();
             let joined = vals.join(", ");
             format!("({ty_c}){{ {joined} }}")
@@ -3951,7 +3920,6 @@ impl<'a> Emitter<'a> {
         for (i, stmt) in block.statements.iter().enumerate() {
             let is_tail = i + 1 == n;
             if is_tail {
-
                 if matches!(&stmt.kind, StmtKind::Return { .. }) {
                     self.emit_stmt_into_pre(stmt);
                 } else {
@@ -3973,7 +3941,6 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_stmt_into_pre(&mut self, stmt: &Stmt) {
-
         let saved_out = std::mem::take(&mut self.out);
         let saved_pre = std::mem::take(&mut self.pre);
         self.emit_stmt(stmt);
@@ -4046,12 +4013,10 @@ impl<'a> Emitter<'a> {
             self.emit_block_value(b, &tmp, &ty);
             self.pre.push_str("    }\n");
         } else if let Some(ElseBranch::If(inner)) = else_branch {
-
             self.pre.push_str(" else { ");
             let inner = self.expr(inner);
             let _ = writeln!(self.pre, "{tmp} = {inner}; }}");
         } else {
-
             self.pre.push('\n');
         }
         tmp
@@ -4180,7 +4145,6 @@ impl<'a> Emitter<'a> {
         }
         let min = int_min_literal(ty);
         if signed && min.is_none() {
-
             return None;
         }
         let lhs = self.fresh_id("il");
@@ -4367,7 +4331,6 @@ impl<'a> Emitter<'a> {
                     variant,
                     arguments,
                 } => {
-
                     let owner = if path.segments.is_empty() {
                         name.to_string()
                     } else {
@@ -4710,7 +4673,6 @@ impl<'a> Emitter<'a> {
     }
 
     fn propagate_c(&mut self, inner: &Expr) -> String {
-
         let result_ty = self.materialized_result_type(inner);
         let inner_c = self.expr(inner);
 
@@ -4751,7 +4713,6 @@ impl<'a> Emitter<'a> {
     }
 
     fn fail_c(&mut self, error: &ast::TypePath, arguments: &FailArguments) -> String {
-
         let name = error.segments.join(".");
         let err_ty = self
             .cur_err
@@ -4832,7 +4793,6 @@ impl<'a> Emitter<'a> {
 }
 
 fn panic_payload(msg_expr: &str) -> String {
-
     if msg_expr.starts_with("(NS_Str)") {
         format!("({msg_expr}).data")
     } else {
@@ -4931,5 +4891,4 @@ fn is_shared_capture(ty: &Type) -> bool {
         Type::Named(name, _)
             if name == "Channel" || name == "Region" || name == "Ptr"
     )
-
 }

@@ -61,14 +61,20 @@ pub struct Abort {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NovaError {
-
     Diagnostics(Vec<Diagnostic>),
 
-    ManualMemoryUnsupported { span: Span },
+    ManualMemoryUnsupported {
+        span: Span,
+    },
 
-    MissingEntry { name: String },
+    MissingEntry {
+        name: String,
+    },
 
-    Unsupported { message: String, span: Option<Span> },
+    Unsupported {
+        message: String,
+        span: Option<Span>,
+    },
 
     UnhandledFailure(Value),
 
@@ -86,7 +92,6 @@ pub enum NovaError {
 }
 
 impl NovaError {
-
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {

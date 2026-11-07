@@ -49,7 +49,6 @@ const EXPORT_AS_SYMBOL: &str = "NS7013";
 
 #[derive(Debug, Clone, Default)]
 pub struct CheckOptions {
-
     pub mode: Mode,
 
     pub target: Option<String>,
@@ -58,7 +57,6 @@ pub struct CheckOptions {
 }
 
 impl CheckOptions {
-
     #[must_use]
     pub fn new(mode: Mode) -> Self {
         Self {
@@ -102,7 +100,6 @@ pub struct TypeAnnotation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckResult {
-
     pub module: hir::Module,
 
     pub annotations: Vec<TypeAnnotation>,
@@ -568,7 +565,6 @@ impl<'a> Checker<'a> {
     }
 
     fn register_imports(&mut self) {
-
         let mut local_to_import: BTreeMap<String, (String, String)> = BTreeMap::new();
         for import in &self.resolved.imports {
             match &import.kind {
@@ -608,7 +604,6 @@ impl<'a> Checker<'a> {
                 symbol.kind,
                 hir::SymbolKind::ImportedValue | hir::SymbolKind::ImportedType
             ) {
-
                 let ty = local_to_import
                     .get(name)
                     .and_then(|(module_key, imported_name)| {
@@ -878,7 +873,6 @@ impl<'a> Checker<'a> {
     }
 
     fn check_deferred_generic_allocs(&mut self) {
-
         type PendingCall = (Span, String, BTreeMap<String, Type>);
         let mut by_enclosing: BTreeMap<String, Vec<PendingCall>> = BTreeMap::new();
         for (span, callee_name, enclosing, subs) in
@@ -934,7 +928,6 @@ impl<'a> Checker<'a> {
 
             if all_concrete && let Some(inner_calls) = by_enclosing.get(&callee_name).cloned() {
                 for (inner_span, inner_callee, inner_subs) in inner_calls {
-
                     let mut composed = inner_subs.clone();
                     for v in composed.values_mut() {
                         *v = v.substitute(&substitutions);
@@ -1186,7 +1179,6 @@ impl<'a> Checker<'a> {
                             continue;
                         };
                         if !is_valid_c_identifier(&spec.symbol) {
-
                             continue;
                         }
                         if symbols.contains_key(&spec.symbol) {
@@ -1481,7 +1473,6 @@ impl<'a> Checker<'a> {
 
     fn holds_managed_refs(&mut self, ty: &Type) -> bool {
         match ty {
-
             Type::Str | Type::Bytes | Type::Array(_) | Type::Slice(_) | Type::Map(_, _) => true,
 
             Type::FixedArray(element, _) => self.holds_managed_refs(element),
@@ -1493,7 +1484,6 @@ impl<'a> Checker<'a> {
                 self.holds_managed_refs(ok) || self.holds_managed_refs(error)
             }
             Type::Named(name, arguments) => match name.as_str() {
-
                 "Ptr" | "Region" => false,
 
                 "Channel" | "Task" => true,
@@ -1511,7 +1501,6 @@ impl<'a> Checker<'a> {
                             })
                         })
                     } else {
-
                         false
                     }
                 }
@@ -2378,7 +2367,6 @@ impl<'a> Checker<'a> {
             return ExprInfo::value(value.ty.clone());
         }
         if name == "None" {
-
             return ExprInfo::value(Type::Option(Box::new(Type::Unknown)));
         }
         if let Some(ty) = builtin_function(name) {
@@ -2969,7 +2957,6 @@ impl<'a> Checker<'a> {
                     return ExprInfo::value(Type::Error);
                 }
                 if member == "alloc" {
-
                     if !self.in_manual_memory_scope(span) {
                         self.error(
                             MANUAL_ALLOC_IN_GC_SCOPE,
@@ -3738,7 +3725,6 @@ impl<'a> Checker<'a> {
         let constructors = self.constructors_for(ty);
         let remaining_types = &types[1..];
         if constructors.is_empty() {
-
             let next = rows
                 .iter()
                 .filter(|row| matches!(row.first(), Some(RowPattern::Wildcard)))
@@ -4749,7 +4735,6 @@ fn builtin_method(ty: &Type, member: &str) -> Option<Type> {
         Type::Named(name, arguments) if name == "Ptr" => {
             let element = arguments.first().cloned().unwrap_or(Type::Unknown);
             match member {
-
                 "read" => FunctionType {
                     type_parameters: Vec::new(),
                     parameters: vec![Type::Usize],
@@ -4766,7 +4751,6 @@ fn builtin_method(ty: &Type, member: &str) -> Option<Type> {
             }
         }
         Type::Named(name, _) if name == "Region" => match member {
-
             "alloc" => FunctionType {
                 type_parameters: vec!["T".to_owned()],
                 parameters: vec![Type::Usize],
@@ -4787,7 +4771,6 @@ fn builtin_method(ty: &Type, member: &str) -> Option<Type> {
         Type::Named(name, arguments) if name == "Channel" => {
             let element = arguments.first().cloned().unwrap_or(Type::Unknown);
             match member {
-
                 "send" => FunctionType {
                     type_parameters: Vec::new(),
                     parameters: vec![element],

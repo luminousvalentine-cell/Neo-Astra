@@ -74,7 +74,6 @@ pub struct EnumValue {
 
 #[derive(Debug)]
 pub struct FunctionValue {
-
     pub(crate) module: String,
     pub(crate) declaration: Rc<ast::FunctionDecl>,
 }
@@ -222,7 +221,6 @@ pub enum Value {
 }
 
 impl Value {
-
     #[must_use]
     pub fn string(value: impl Into<String>) -> Self {
         Self::Str(Rc::from(value.into()))

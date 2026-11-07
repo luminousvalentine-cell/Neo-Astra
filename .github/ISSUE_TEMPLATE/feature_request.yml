@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a language, compiler, CLI, package, or editor feature.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can you not do today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change, and which mode or target does it affect?
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility
+      description: Does this change the language contract, a public diagnostic, or a release artifact?
+  - type: checkboxes
+    id: claims
+    attributes:
+      label: Status honesty
+      options:
+        - label: I have not described app, web, or system as complete unless the support matrix says so.
+          required: true

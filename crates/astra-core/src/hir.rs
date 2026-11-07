@@ -6,7 +6,6 @@ use crate::types::Type;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Module {
-
     pub name: String,
 
     pub items: Vec<Item>,
@@ -44,7 +43,6 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-
     #[must_use]
     pub const fn export_kind(self) -> ExportKind {
         match self {
@@ -68,7 +66,6 @@ pub enum Declaration {
 }
 
 impl Declaration {
-
     #[must_use]
     pub const fn kind(&self) -> ItemKind {
         match self {
@@ -85,7 +82,6 @@ impl Declaration {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Import {
-
     pub module: String,
     pub kind: ImportKind,
     pub span: Span,
@@ -124,7 +120,6 @@ pub struct SymbolTable {
 }
 
 impl SymbolTable {
-
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&Symbol> {
         self.values
@@ -167,7 +162,6 @@ pub enum SymbolKind {
 }
 
 impl SymbolKind {
-
     #[must_use]
     pub const fn export_kind(self) -> ExportKind {
         match self {
@@ -189,7 +183,6 @@ pub enum SymbolOrigin {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExportSurface {
-
     pub named: BTreeMap<String, Export>,
 
     pub default: Option<Export>,
@@ -198,7 +191,6 @@ pub struct ExportSurface {
 }
 
 impl ExportSurface {
-
     #[must_use]
     pub fn get_named(&self, name: &str) -> Option<&Export> {
         self.named.get(name)
@@ -228,7 +220,6 @@ pub enum ExportKind {
 }
 
 impl ExportKind {
-
     #[must_use]
     pub const fn is_value(self) -> bool {
         matches!(self, Self::Value | Self::ValueAndType | Self::Namespace)
@@ -242,7 +233,6 @@ impl ExportKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExportTarget {
-
     Local(String),
 
     Reexport { module: String, name: String },

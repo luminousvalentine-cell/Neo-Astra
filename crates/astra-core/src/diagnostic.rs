@@ -14,7 +14,6 @@ pub enum Severity {
 }
 
 impl Severity {
-
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -36,7 +35,6 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-
     #[must_use]
     pub fn error(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {

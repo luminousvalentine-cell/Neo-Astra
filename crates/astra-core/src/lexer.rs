@@ -40,7 +40,6 @@ pub enum Keyword {
 }
 
 impl Keyword {
-
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -153,7 +152,6 @@ pub struct LexResult {
 }
 
 impl LexResult {
-
     #[must_use]
     pub fn has_errors(&self) -> bool {
         !self.diagnostics.is_empty()
@@ -837,7 +835,6 @@ impl<'a> Lexer<'a> {
             }
             '@' => {
                 if self.starts_with("script:") {
-
                     self.script_header_depth = 1;
                     self.script_start = self
                         .tokens

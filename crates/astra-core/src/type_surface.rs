@@ -9,7 +9,6 @@ use crate::types::{FunctionType, Type};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportedValue {
-
     pub name: String,
 
     pub ty: Type,
@@ -30,7 +29,6 @@ pub enum ImportedTypeDef {
 }
 
 impl ImportedTypeDef {
-
     #[must_use]
     pub fn name(&self) -> &str {
         match self {
@@ -41,7 +39,6 @@ impl ImportedTypeDef {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModuleTypeSurface {
-
     pub values: BTreeMap<String, Type>,
 
     pub type_defs: BTreeMap<String, ImportedTypeDef>,
@@ -50,7 +47,6 @@ pub struct ModuleTypeSurface {
 }
 
 impl ModuleTypeSurface {
-
     #[must_use]
     pub fn get_value(&self, name: &str) -> Option<&Type> {
         self.values.get(name)
@@ -208,7 +204,6 @@ pub fn module_type_surface_with_surfaces(
 
 #[derive(Debug, Clone)]
 pub struct ProjectModule {
-
     pub key: String,
 
     pub source: ast::Module,
@@ -216,14 +211,12 @@ pub struct ProjectModule {
 
 #[derive(Debug, Clone)]
 pub struct GraphCheckResult {
-
     pub modules: Vec<(String, CheckResult)>,
 
     pub diagnostics: Vec<(String, Vec<Diagnostic>)>,
 }
 
 impl GraphCheckResult {
-
     #[must_use]
     pub fn is_ok(&self) -> bool {
         self.diagnostics.is_empty()
@@ -275,7 +268,6 @@ pub fn check_module_graph_with_imports(
     let resolver = ModuleResolver::from_graph(graph);
 
     for project_module in modules {
-
         let resolved = match resolver.resolve_named(&project_module.key) {
             Ok(resolved) => resolved,
             Err(diagnostics) => {

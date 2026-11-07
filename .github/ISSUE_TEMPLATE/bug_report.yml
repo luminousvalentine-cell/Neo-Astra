@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a compiler, CLI, package, or documentation bug.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not use this form for an unfixed security vulnerability. Use the
+        private security advisory flow described in SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Neo Astra version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: host
+    attributes:
+      label: Host
+      options:
+        - Windows x64
+        - Linux x64
+        - macOS arm64
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - core
+        - app
+        - web
+        - system
+        - not mode-specific
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Include a minimal project and the exact commands.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include diagnostics and the full error output.
+    validations:
+      required: true

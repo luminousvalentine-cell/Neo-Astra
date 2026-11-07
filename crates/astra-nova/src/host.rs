@@ -1,5 +1,4 @@
 pub trait Host {
-
     fn stdout(&mut self, text: &str);
 
     fn stderr(&mut self, text: &str);
@@ -31,7 +30,6 @@ pub struct BufferHost {
 }
 
 impl BufferHost {
-
     #[must_use]
     pub fn new() -> Self {
         Self::default()

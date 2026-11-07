@@ -29,20 +29,17 @@ const SCRIPT_NAMESPACE_COLLISION: &str = "NS7006";
 pub type ResolveResult<T> = Result<T, Vec<Diagnostic>>;
 
 pub trait Resolver {
-
     fn resolve_module(&self, module: &ast::Module) -> ResolveResult<hir::Module>;
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ModuleGraph {
-
     pub modules: BTreeMap<String, ast::Module>,
 
     pub imports: BTreeMap<(String, String), String>,
 }
 
 impl ModuleGraph {
-
     pub fn insert_module(&mut self, id: impl Into<String>, module: ast::Module) {
         self.modules.insert(id.into(), module);
     }
@@ -67,7 +64,6 @@ pub struct ModuleResolver {
 }
 
 impl ModuleResolver {
-
     #[must_use]
     pub fn standalone() -> Self {
         Self::default()
@@ -134,7 +130,6 @@ pub fn resolve_module(module: &ast::Module) -> ResolveResult<hir::Module> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleSpecifier {
-
     pub specifier: String,
 
     pub span: Span,
