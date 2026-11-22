@@ -6,7 +6,7 @@ This repo is the public source mirror. It holds the production source plus the f
 
 ## Where things stand
 
-Neo Astra `1.0.0` is out. The table below is the current support contract.
+Neo Astra `1.0.1` is out. The table below is the current support contract.
 
 | Area | Status | Notes |
 | --- | --- | --- |
@@ -25,7 +25,9 @@ Neo Astra `1.0.0` is out. The table below is the current support contract.
 | Wasm execution backend | **Later** | Not shipped. |
 | Browser playground | **Later** | Not shipped. |
 
-The 1.0 release archives are built for **Windows x64**, **Linux x64**, and **macOS arm64**. Other platforms may build from source, but they aren't official release targets yet.
+The 1.0.1 release archives are built for **Windows x64**, **Linux x64**, and **macOS arm64**. Other platforms may build from source, but they aren't official release targets yet.
+
+In `1.0.1` the `astra` and `nopm` commands are native Rust binaries. `check`, `fmt`, `ast`, `explain`, `doctor`, C and native builds, and NoPM path flows need no Node.js or npm at runtime. Only JS and TypeScript builds use an isolated, on-demand Node bridge.
 
 ## Installing
 
