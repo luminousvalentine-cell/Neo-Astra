@@ -10,7 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - The Apache-2.0 license, a `NOTICE` file, and `CONTRIBUTORS.md`.
 - The public onboarding files: `README.md`, `INSTALL.md`, `SECURITY.md`, `CONTRIBUTING.md`, `.github/CODEOWNERS`, and `examples/hello`.
-- npm provenance and GitHub release artifact attestations, which will apply to future releases.
+- npm provenance and GitHub release artifact attestations.
 
 ### Changed
 
@@ -19,8 +19,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Work in progress
 
-- Native Rust CLI, phase 1: `check`, `fmt`, `ast`, and `explain` for a single source file.
 - Native language server, phase 1: a stdio LSP with diagnostics and formatting.
+
+## [1.0.1] - 2026-11-22
+
+### Added
+
+- Native Rust `astra` and `nopm` binaries replace the Bun-compiled CLI and the `nopm` launcher. Baseline `check`, `fmt`, `ast`, `explain`, `doctor`, C and native builds, and NoPM path flows run without Node.js, npm, Cargo, or a source checkout.
+- JS and TypeScript code generation is delegated to an isolated, on-demand Node bridge. JS/TS builds are the only path that needs Node.js at runtime.
+- Native toolchain resolution and verified pinned downloads with `--no-download`, plus a native NoPM store, lockfile, and registry adapters.
+- Release archives now include the native compiler and Nova binaries, the pinned TypeScript compiler, and smoke coverage for packages installed outside the repo.
+
+### Fixed
+
+- Packaged JS/TS builds now run when the package lives under a symlinked path, including macOS temporary directories.
+- Native `--version` output and generated lockfiles now follow the workspace version instead of a hardcoded `1.0.0`.
 
 ## [1.0.0] - 2026-11-06
 

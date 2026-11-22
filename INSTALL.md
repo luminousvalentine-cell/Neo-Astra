@@ -1,6 +1,6 @@
 # Install and upgrade
 
-Neo Astra `1.0.0` ships as a host-native package. Once it's installed, you don't need Node.js, npm, Cargo, or a source checkout to run it. There's no background service and nothing is stored globally beyond the installed commands.
+Neo Astra `1.0.1` ships as a host-native package. Once it's installed, you don't need Node.js, npm, Cargo, or a source checkout to run it. There's no background service and nothing is stored globally beyond the installed commands.
 
 ## Supported hosts
 
@@ -10,7 +10,7 @@ Neo Astra `1.0.0` ships as a host-native package. Once it's installed, you don't
 | Linux x64 | yes | `neo-astra-linux-x64` |
 | macOS arm64 | yes | `neo-astra-darwin-arm64` |
 
-Other hosts can build from source, but they aren't covered by the 1.0 release contract.
+Other hosts can build from source, but they aren't covered by the 1.0.1 release contract.
 
 ## Install from npm
 
@@ -47,7 +47,7 @@ Here's what's inside the archive:
 
 The binaries are compiled and stripped, so the package has no TypeScript sources, source maps, comments, or debug symbols.
 
-A `.sha256` sidecar catches corrupted downloads, but it can't prove an archive wasn't swapped out. For releases after `1.0.0` we turn on provenance attestations. When one is present, you can verify it with the GitHub CLI:
+A `.sha256` sidecar catches corrupted downloads, but it can't prove an archive wasn't swapped out. The 1.0.1 archives include provenance attestations. When one is present, you can verify it with the GitHub CLI:
 
 ```sh
 gh attestation verify neo-astra-*.tar.gz --repo luminousvalentine-cell/Neo-Astra
@@ -103,7 +103,7 @@ npm update --global neo-astra
 astra --version
 ```
 
-With an archive, download the new one, verify its sidecar, and replace the old unpacked directory. Published tags are immutable, so never edit a released archive in place. Any source change after `1.0.0` goes out as a new patch or minor version.
+With an archive, download the new one, verify its sidecar, and replace the old unpacked directory. Published tags are immutable, so never edit a released archive in place. Any source change after a published tag goes out as a new patch or minor version.
 
 All package versions move together. If `astra --version` doesn't match the package metadata, reinstall rather than adjusting one version by hand.
 
