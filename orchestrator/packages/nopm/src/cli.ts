@@ -43,7 +43,7 @@ import { resolveRegistryPackage } from "./registry-client.js";
 import { installLockedPackages } from "./store.js";
 import { readProject, type ProjectManifest } from "./project.js";
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 const GENERATED_BY = `nopm/${VERSION}`;
 const COMPILER = { version: VERSION, apiVersion: "1.0" } as const;
 
