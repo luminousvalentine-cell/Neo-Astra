@@ -98,6 +98,14 @@ if (buildPlatform) {
   rmSync(platformOut, { recursive: true, force: true });
   mkdirSync(join(platformOut, "bin"), { recursive: true });
   mkdirSync(join(platformOut, "typescript"), { recursive: true });
+  mkdirSync(join(platformOut, "lib", "cli"), { recursive: true });
+
+  if (existsSync(join(sourceDir, "lib", "cli"))) {
+    const { cpSync } = await import("node:fs");
+    cpSync(join(sourceDir, "lib", "cli"), join(platformOut, "lib", "cli"), {
+      recursive: true,
+    });
+  }
 
   copyFile(
     join(sourceDir, "bin", `astra${executable}`),
@@ -119,15 +127,14 @@ if (buildPlatform) {
     join(platformOut, "bin", `nopm${executable}`),
     0o755,
   );
-  copyFile(
-    join(sourceDir, "typescript", `tsc${executable}`),
-    join(platformOut, "typescript", `tsc${executable}`),
-    0o755,
-  );
-  copyFile(
-    join(sourceDir, "typescript", "package.json"),
-    join(platformOut, "typescript", "package.json"),
-  );
+
+  const { cpSync } = await import("node:fs");
+  cpSync(join(sourceDir, "typescript"), join(platformOut, "typescript"), {
+    recursive: true,
+  });
+  if (platform !== "win32") {
+    chmodSync(join(platformOut, "typescript", `tsc${executable}`), 0o755);
+  }
 
   const host =
     platform === "win32"
@@ -145,7 +152,8 @@ if (buildPlatform) {
       "points.",
       "",
       "The binaries are the same standalone tools as the GitHub release archive.",
-      "No Node.js, npm, or Cargo is needed at runtime.",
+      "Native/core commands need no Node.js, npm, or Cargo at runtime.",
+      "JS/TS builds use the packaged Node bridge and need Node.js on PATH.",
       "",
     ].join("\n"),
     "utf8",
@@ -156,7 +164,7 @@ if (buildPlatform) {
     description: `Neo Astra native toolchain for ${host}`,
     os: [platform],
     cpu: [arch],
-    files: ["bin", "typescript", "README.md"],
+    files: ["bin", "typescript", "lib", "README.md"],
   });
   process.stdout.write(
     `[package-npm] platform ${target} -> ${platformOut}\n`,
@@ -206,7 +214,9 @@ if (buildMeta) {
         "",
         "The npm package is an installer. The installed `astra`, `nopm`, and",
         "`nova` commands are the same native binaries as the GitHub archive;",
-        "they do not need Node.js, npm, Cargo, or a source checkout at runtime.",
+        "native/core commands do not need Node.js, npm, Cargo, or a source",
+        "checkout at runtime. JS/TS builds use the packaged Node bridge and need",
+        "Node.js on PATH.",
         "",
         "Do not install with `--ignore-scripts`.",
         "",

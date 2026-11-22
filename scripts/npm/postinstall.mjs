@@ -45,11 +45,20 @@ function copyRequired(source, targetPath) {
 
 function copyToolchain(source) {
   const bin = join(here, "bin");
+  const lib = join(here, "lib");
   const typescript = join(here, "typescript");
   rmSync(bin, { recursive: true, force: true });
+  rmSync(lib, { recursive: true, force: true });
   rmSync(typescript, { recursive: true, force: true });
   mkdirSync(bin, { recursive: true });
-  mkdirSync(typescript, { recursive: true });
+  const { cpSync } = require("node:fs");
+  if (existsSync(join(source, "lib"))) {
+    cpSync(join(source, "lib"), lib, { recursive: true });
+  }
+  if (!existsSync(join(source, "typescript"))) {
+    throw new Error(`platform package is missing ${join(source, "typescript")}`);
+  }
+  cpSync(join(source, "typescript"), typescript, { recursive: true });
 
   const sourceBin = join(source, "bin");
   const astra = join(bin, "astra.exe");
@@ -65,14 +74,6 @@ function copyToolchain(source) {
   copyRequired(
     join(sourceBin, `nopm${executable}`),
     join(bin, "nopm.exe"),
-  );
-  copyRequired(
-    join(source, "typescript", `tsc${executable}`),
-    join(typescript, `tsc${executable}`),
-  );
-  copyRequired(
-    join(source, "typescript", "package.json"),
-    join(typescript, "package.json"),
   );
 
   if (process.platform !== "win32") {

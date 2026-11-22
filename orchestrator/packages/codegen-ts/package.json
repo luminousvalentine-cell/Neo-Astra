@@ -1,6 +1,6 @@
 {
   "name": "@neo-astra/codegen-ts",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -16,7 +16,7 @@
     "clean": "tsc -b --clean"
   },
   "dependencies": {
-    "@neo-astra/codegen-js": "1.0.0",
+    "@neo-astra/codegen-js": "1.0.1",
     "typescript": "7.0.2"
   }
 }

@@ -1,12 +1,19 @@
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 use std::process;
 
-use astra_compiler_api::{API_VERSION, CompileRequest, CompilerApi, FrontendCompiler, SourceUnit};
 use astra_core::diagnostic::{Diagnostic, Severity};
 use astra_core::formatter::format_source;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+mod features;
+mod project;
+mod text;
+
+use project::{ProjectSnapshot, uri_to_path};
+use text::offset_to_position;
 
 #[derive(Deserialize)]
 struct RpcMessage {
@@ -48,6 +55,8 @@ struct LspDiagnostic {
 
 struct Server {
     buffers: HashMap<String, String>,
+    root: Option<PathBuf>,
+    project: Option<ProjectSnapshot>,
     shutdown: bool,
 }
 
@@ -55,8 +64,24 @@ impl Server {
     fn new() -> Self {
         Self {
             buffers: HashMap::new(),
+            root: None,
+            project: None,
             shutdown: false,
         }
+    }
+
+    fn refresh_project(&mut self, uri: &str) {
+        let Some(root) = self.root.clone() else {
+            if let Some(text) = self.buffers.get(uri) {
+                let snapshot = ProjectSnapshot::single(uri, text);
+                publish_project_diagnostics(&snapshot);
+                self.project = Some(snapshot);
+            }
+            return;
+        };
+        let snapshot = ProjectSnapshot::load(&root, &self.buffers);
+        publish_project_diagnostics(&snapshot);
+        self.project = Some(snapshot);
     }
 }
 
@@ -82,14 +107,30 @@ fn main() {
 
         match msg.method.as_str() {
             "initialize" => {
+                if let Some(params) = &msg.params {
+                    server.root = workspace_root(params);
+                }
                 let result = json!({
                     "capabilities": {
                         "textDocumentSync": 1,
-                        "documentFormattingProvider": true
+                        "documentFormattingProvider": true,
+                        "hoverProvider": true,
+                        "definitionProvider": true,
+                        "referencesProvider": true,
+                        "documentHighlightProvider": true,
+                        "documentSymbolProvider": true,
+                        "workspaceSymbolProvider": true,
+                        "renameProvider": true,
+                        "signatureHelpProvider": {
+                            "triggerCharacters": ["(", ","]
+                        },
+                        "completionProvider": {
+                            "triggerCharacters": [".", ":"]
+                        }
                     },
                     "serverInfo": {
                         "name": "astra-lsp",
-                        "version": "1.0.0"
+                        "version": "2.0.0"
                     }
                 });
                 if let Some(id) = msg.id {
@@ -134,7 +175,7 @@ fn main() {
                         .to_owned();
                     if !uri.is_empty() {
                         server.buffers.insert(uri.clone(), text.clone());
-                        publish_diagnostics(&server, &uri, &text);
+                        server.refresh_project(&uri);
                     }
                 }
             }
@@ -160,7 +201,7 @@ fn main() {
                     }
                     if let Some(text) = new_text {
                         server.buffers.insert(uri.clone(), text.clone());
-                        publish_diagnostics(&server, &uri, &text);
+                        server.refresh_project(&uri);
                     }
                 }
             }
@@ -185,7 +226,7 @@ fn main() {
                         server.buffers.get(&uri).cloned().unwrap_or_default()
                     };
                     server.buffers.insert(uri.clone(), text.clone());
-                    publish_diagnostics(&server, &uri, &text);
+                    server.refresh_project(&uri);
                 }
             }
             "textDocument/didClose" => {
@@ -207,7 +248,162 @@ fn main() {
                                 "diagnostics": []
                             }
                         }));
+                        if server.root.is_some() {
+                            server.refresh_project(&uri);
+                        }
                     }
+                }
+            }
+            "textDocument/hover" => {
+                if let Some(id) = msg.id.clone() {
+                    let (uri, line, character) = request_position(msg.params.as_ref());
+                    let result = with_snapshot(&server, &uri, |snapshot| {
+                        features::hover(snapshot, &uri, line, character)
+                    })
+                    .flatten();
+                    write_message(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result
+                    }));
+                }
+            }
+            "textDocument/definition" => {
+                if let Some(id) = msg.id.clone() {
+                    let (uri, line, character) = request_position(msg.params.as_ref());
+                    let result = with_snapshot(&server, &uri, |snapshot| {
+                        features::definition(snapshot, &uri, line, character)
+                    })
+                    .flatten();
+                    write_message(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result
+                    }));
+                }
+            }
+            "textDocument/references" => {
+                if let Some(id) = msg.id.clone() {
+                    let (uri, line, character) = request_position(msg.params.as_ref());
+                    let include_declaration = msg
+                        .params
+                        .as_ref()
+                        .and_then(|params| params.get("context"))
+                        .and_then(|context| context.get("includeDeclaration"))
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true);
+                    let result = with_snapshot(&server, &uri, |snapshot| {
+                        features::references(snapshot, &uri, line, character, include_declaration)
+                    })
+                    .unwrap_or_default();
+                    write_message(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result
+                    }));
+                }
+            }
+            "textDocument/documentHighlight" => {
+                if let Some(id) = msg.id.clone() {
+                    let (uri, line, character) = request_position(msg.params.as_ref());
+                    let result = with_snapshot(&server, &uri, |snapshot| {
+                        features::document_highlight(snapshot, &uri, line, character)
+                    })
+                    .unwrap_or_default();
+                    write_message(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result
+                    }));
+                }
+            }
+            "textDocument/rename" => {
+                if let Some(id) = msg.id.clone() {
+                    let (uri, line, character) = request_position(msg.params.as_ref());
+                    let new_name = msg
+                        .params
+                        .as_ref()
+                        .and_then(|params| params.get("newName"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    let result = with_snapshot(&server, &uri, |snapshot| {
+                        features::rename(snapshot, &uri, line, character, &new_name)
+                    })
+                    .flatten();
+                    write_message(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result
+                    }));
+                }
+            }
+            "textDocument/completion" => {
+                if let Some(id) = msg.id.clone() {
+                    let (uri, line, character) = request_position(msg.params.as_ref());
+                    let result = with_snapshot(&server, &uri, |snapshot| {
+                        features::completion(snapshot, &uri, line, character)
+                    })
+                    .unwrap_or_default();
+                    write_message(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result
+                    }));
+                }
+            }
+            "textDocument/documentSymbol" => {
+                if let Some(id) = msg.id.clone() {
+                    let uri = msg
+                        .params
+                        .as_ref()
+                        .and_then(|params| params.get("textDocument"))
+                        .and_then(|document| document.get("uri"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    let result = with_snapshot(&server, &uri, |snapshot| {
+                        features::document_symbols(snapshot, &uri)
+                    })
+                    .unwrap_or_default();
+                    write_message(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result
+                    }));
+                }
+            }
+            "workspace/symbol" => {
+                if let Some(id) = msg.id.clone() {
+                    let query = msg
+                        .params
+                        .as_ref()
+                        .and_then(|params| params.get("query"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_owned();
+                    let result = server.project.as_ref().map_or_else(Vec::new, |snapshot| {
+                        features::workspace_symbols(snapshot, &query)
+                    });
+                    write_message(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result
+                    }));
+                }
+            }
+            "textDocument/signatureHelp" => {
+                if let Some(id) = msg.id.clone() {
+                    let (uri, line, character) = request_position(msg.params.as_ref());
+                    let result = with_snapshot(&server, &uri, |snapshot| {
+                        features::signature_help(snapshot, &uri, line, character)
+                    })
+                    .flatten();
+                    write_message(&json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result
+                    }));
                 }
             }
             "textDocument/formatting" => {
@@ -273,6 +469,87 @@ fn main() {
     }
 }
 
+fn workspace_root(params: &Value) -> Option<PathBuf> {
+    if let Some(root_uri) = params.get("rootUri").and_then(Value::as_str)
+        && let Some(path) = uri_to_path(root_uri)
+    {
+        return Some(root_directory(path));
+    }
+    if let Some(root_path) = params.get("rootPath").and_then(Value::as_str) {
+        return Some(root_directory(PathBuf::from(root_path)));
+    }
+    params
+        .get("workspaceFolders")
+        .and_then(Value::as_array)
+        .and_then(|folders| folders.first())
+        .and_then(|folder| folder.get("uri"))
+        .and_then(Value::as_str)
+        .and_then(uri_to_path)
+        .map(root_directory)
+}
+
+fn root_directory(path: PathBuf) -> PathBuf {
+    if path.is_file() {
+        path.parent().map_or(path.clone(), PathBuf::from)
+    } else {
+        path
+    }
+}
+
+fn request_position(params: Option<&Value>) -> (String, u32, u32) {
+    let params = params.unwrap_or(&Value::Null);
+    let uri = params
+        .get("textDocument")
+        .and_then(|document| document.get("uri"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let line = params
+        .get("position")
+        .and_then(|position| position.get("line"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u32;
+    let character = params
+        .get("position")
+        .and_then(|position| position.get("character"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u32;
+    (uri, line, character)
+}
+
+fn with_snapshot<R>(
+    server: &Server,
+    uri: &str,
+    feature: impl FnOnce(&ProjectSnapshot) -> R,
+) -> Option<R> {
+    if let Some(snapshot) = &server.project
+        && snapshot.module_for_uri(uri).is_some()
+    {
+        return Some(feature(snapshot));
+    }
+    let text = server.buffers.get(uri)?;
+    let snapshot = ProjectSnapshot::single(uri, text);
+    Some(feature(&snapshot))
+}
+
+fn publish_project_diagnostics(snapshot: &ProjectSnapshot) {
+    for module in snapshot.modules.values() {
+        let diagnostics: Vec<LspDiagnostic> = module
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diag_to_lsp(&module.text, diagnostic))
+            .collect();
+        write_message(&json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+                "uri": module.uri,
+                "diagnostics": diagnostics
+            }
+        }));
+    }
+}
+
 fn read_message(reader: &mut impl BufRead) -> Result<Option<RpcMessage>, ()> {
     let mut content_length: Option<usize> = None;
     loop {
@@ -312,19 +589,6 @@ fn write_message(value: &Value) {
     let _ = stdout.flush();
 }
 
-fn publish_diagnostics(_server: &Server, uri: &str, text: &str) {
-    let diags = check_buffer(text);
-    let lsp_diags: Vec<LspDiagnostic> = diags.iter().map(|d| diag_to_lsp(text, d)).collect();
-    write_message(&json!({
-        "jsonrpc": "2.0",
-        "method": "textDocument/publishDiagnostics",
-        "params": {
-            "uri": uri,
-            "diagnostics": lsp_diags
-        }
-    }));
-}
-
 fn publish_diagnostics_for_text(uri: &str, text: &str, diags: &[Diagnostic]) {
     let lsp_diags: Vec<LspDiagnostic> = diags.iter().map(|d| diag_to_lsp(text, d)).collect();
     write_message(&json!({
@@ -335,22 +599,6 @@ fn publish_diagnostics_for_text(uri: &str, text: &str, diags: &[Diagnostic]) {
             "diagnostics": lsp_diags
         }
     }));
-}
-
-fn check_buffer(text: &str) -> Vec<Diagnostic> {
-    let request = CompileRequest {
-        api_version: API_VERSION.to_owned(),
-        source: SourceUnit {
-            path: "buffer.ns".to_owned(),
-            text: text.to_owned(),
-        },
-        target: "js".to_owned(),
-        mode: None,
-        integer_policy: Default::default(),
-    };
-    let compiler = FrontendCompiler;
-    let response = compiler.check(&request);
-    response.diagnostics
 }
 
 fn diag_to_lsp(text: &str, d: &Diagnostic) -> LspDiagnostic {
@@ -389,33 +637,4 @@ fn diag_to_lsp(text: &str, d: &Diagnostic) -> LspDiagnostic {
         source: "astra".to_owned(),
         message,
     }
-}
-
-fn offset_to_position(text: &str, offset: usize) -> (u32, u32) {
-    let offset = offset.min(text.len());
-
-    let mut o = offset;
-    while o > 0 && !text.is_char_boundary(o) {
-        o -= 1;
-    }
-    let mut line = 0u32;
-    let mut col = 0u32;
-    let mut i = 0usize;
-    for ch in text.chars() {
-        if i >= o {
-            break;
-        }
-        let len = ch.len_utf8();
-        if i + len > o {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            col = 0;
-        } else {
-            col += ch.len_utf16() as u32;
-        }
-        i += len;
-    }
-    (line, col)
 }

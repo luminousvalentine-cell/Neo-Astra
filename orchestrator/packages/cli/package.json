@@ -1,6 +1,6 @@
 {
   "name": "@neo-astra/cli",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "bin": {
@@ -19,10 +19,10 @@
     "clean": "tsc -b --clean"
   },
   "dependencies": {
-    "@neo-astra/codegen-js": "1.0.0",
-    "@neo-astra/codegen-ts": "1.0.0",
-    "@neo-astra/compiler-client": "1.0.0",
-    "@neo-astra/manifest": "1.0.0",
-    "@neo-astra/toolchain": "1.0.0"
+    "@neo-astra/codegen-js": "1.0.1",
+    "@neo-astra/codegen-ts": "1.0.1",
+    "@neo-astra/compiler-client": "1.0.1",
+    "@neo-astra/manifest": "1.0.1",
+    "@neo-astra/toolchain": "1.0.1"
   }
 }
