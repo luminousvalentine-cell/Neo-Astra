@@ -17,12 +17,19 @@ export interface DiagnosticSpan {
   readonly end: number;
 }
 
+export interface RelatedSpan {
+  readonly file: string;
+  readonly span: DiagnosticSpan;
+  readonly message: string;
+}
+
 export interface CompilerDiagnostic {
   readonly code: string;
   readonly severity: "error" | "warning" | "note" | "help";
   readonly message: string;
   readonly span: DiagnosticSpan | null;
   readonly hint: string | null;
+  readonly related?: readonly RelatedSpan[];
 }
 
 export interface FormatResponse {
@@ -91,6 +98,20 @@ export interface FormatRequest {
   readonly target?: string;
 
   readonly mode?: Mode;
+}
+
+export interface MigrateRequest {
+  readonly source: SourceUnit;
+  readonly changeEdition?: boolean;
+}
+
+export interface MigrateResponse {
+  readonly apiVersion: string;
+
+  readonly ok: boolean;
+  readonly changed: boolean;
+  readonly source: string;
+  readonly diagnostics: readonly CompilerDiagnostic[];
 }
 
 export interface CompilerClientOptions {
@@ -269,12 +290,38 @@ function parseDiagnostic(value: unknown): CompilerDiagnostic {
     span = { start: spanValue["start"], end: spanValue["end"] };
   }
 
+  const relatedValue = value["related"];
+  let related: RelatedSpan[] | undefined;
+  if (Array.isArray(relatedValue)) {
+    related = relatedValue.map((entry) => {
+      if (
+        !isRecord(entry) ||
+        typeof entry["file"] !== "string" ||
+        typeof entry["message"] !== "string" ||
+        !isRecord(entry["span"]) ||
+        typeof entry["span"]["start"] !== "number" ||
+        typeof entry["span"]["end"] !== "number"
+      ) {
+        throw new CompilerClientError(
+          "NS9005",
+          "Compiler returned an invalid diagnostic related span.",
+        );
+      }
+      return {
+        file: entry["file"],
+        span: { start: entry["span"]["start"], end: entry["span"]["end"] },
+        message: entry["message"],
+      };
+    });
+  }
+
   return {
     code,
     severity,
     message,
     span,
     hint: hintValue,
+    ...(related === undefined || related.length === 0 ? {} : { related }),
   };
 }
 
@@ -621,6 +668,42 @@ export class CompilerClient {
       ok: result["ok"],
       ...(inference === undefined ? {} : { inference }),
       ...(typeof explanation === "string" ? { explanation } : {}),
+      diagnostics: result["diagnostics"].map(parseDiagnostic),
+    };
+  }
+
+  migrate(request: MigrateRequest): MigrateResponse {
+    const result = this.send(
+      "migrate",
+      "astra-migrate",
+      {
+        apiVersion: COMPILER_API_VERSION,
+        source: request.source,
+        changeEdition: request.changeEdition ?? false,
+      },
+      32 * 1024 * 1024,
+    );
+    if (
+      !isRecord(result) ||
+      typeof result["apiVersion"] !== "string" ||
+      typeof result["ok"] !== "boolean" ||
+      typeof result["changed"] !== "boolean" ||
+      typeof result["source"] !== "string" ||
+      !Array.isArray(result["diagnostics"])
+    ) {
+      throw new CompilerClientError("NS9005", "Compiler returned an invalid migrate result.");
+    }
+    if (result["apiVersion"] !== COMPILER_API_VERSION) {
+      throw new CompilerClientError(
+        "NS9005",
+        `Compiler returned API ${result["apiVersion"]}; expected ${COMPILER_API_VERSION}.`,
+      );
+    }
+    return {
+      apiVersion: result["apiVersion"],
+      ok: result["ok"],
+      changed: result["changed"],
+      source: result["source"],
       diagnostics: result["diagnostics"].map(parseDiagnostic),
     };
   }

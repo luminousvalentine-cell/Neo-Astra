@@ -22,6 +22,7 @@ import {
   type AstResponse,
   type CompilerDiagnostic,
   type ExplainResponse,
+  type MigrateResponse,
   type Mode,
 } from "@neo-astra/compiler-client";
 import {
@@ -37,7 +38,7 @@ import {
 } from "@neo-astra/manifest";
 import { parseToolchainPolicy, resolveToolchainAsync, doctorAsync, ToolchainError, compilerInvocation, type ToolchainPolicy, type ToolchainProbe } from "@neo-astra/toolchain";
 
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 const SOURCE_EXTENSION = ".ns";
 
 const IGNORED_DIRECTORIES = new Set([
@@ -62,6 +63,8 @@ Commands:
   doctor [dir] [--json]  Resolve and print the toolchain ladder
   build [dir]            Build the configured target
   fmt [path] [--check]   Format .ns source and core.json/core.toml
+  migrate [path]         Rewrite v0.1 source to canonical edition 0.2
+                           (--check, --dry-run, --json, --change-edition)
   ast [path]             Print the parsed AST of a file or the project entry
   explain [path]         Explain mode/capability inference for a file or entry
 
@@ -129,6 +132,15 @@ interface SourceFile {
   readonly kind: FormatFileKind;
 }
 
+interface ReportedRelated {
+  readonly file: string;
+  readonly start: number;
+  readonly end: number;
+  readonly message: string;
+  readonly line?: number;
+  readonly column?: number;
+}
+
 interface ReportedDiagnostic {
   readonly code: string;
   readonly severity: CompilerDiagnostic["severity"];
@@ -137,6 +149,7 @@ interface ReportedDiagnostic {
   readonly path: string | null;
   readonly line: number | null;
   readonly column: number | null;
+  readonly related?: readonly ReportedRelated[];
 }
 
 type FileStatus = "formatted" | "unchanged" | "would-reformat" | "error";
@@ -217,10 +230,7 @@ function manifestJson(manifest: ManifestDocument): string {
 
 function manifestText(manifest: ManifestDocument): string {
   const packageName = getPackageName(manifest);
-  const lines = [
-    `Manifest: ${manifest.file.path}`,
-    `Format: ${manifest.file.format}`,
-  ];
+  const lines = [`Manifest: ${manifest.file.path}`];
 
   if (packageName !== undefined) {
     lines.push(`Package: ${packageName}`);
@@ -587,15 +597,19 @@ function runCheck(args: readonly string[], cwd: string): number {
         `${JSON.stringify({ ...base, ok: !hasErrors, diagnostics }, null, 2)}\n`,
       );
     } else {
-      process.stdout.write(manifestText(manifest));
-      for (const diagnostic of diagnostics) {
-        printDiagnostic(diagnostic);
+      if (!hasErrors) {
+        process.stdout.write(manifestText(manifest));
       }
+      printDiagnostics(diagnostics);
     }
     return hasErrors ? 1 : 0;
   } catch (error) {
     if (error instanceof ManifestError) {
-      process.stderr.write(json ? `${diagnosticJson(error)}\n` : `${error.code}: ${error.message}\n`);
+      if (json) {
+        process.stderr.write(`${diagnosticJson(error)}\n`);
+      } else {
+        printDiagnostics([errorDiagnostic(error)]);
+      }
       return 1;
     }
 
@@ -718,6 +732,10 @@ function resolveInspectionSource(
   return { root: dirname(absolute), file, source: readSource(file) };
 }
 
+function isErrorCode(value: string): boolean {
+  return /^(?:NS|NP|NR|NV|PG)\d{4}$/.test(value);
+}
+
 function runInspection(command: "ast" | "explain", args: readonly string[], cwd: string): number {
   if (args.includes("-h") || args.includes("--help")) {
     printHelp();
@@ -729,6 +747,13 @@ function runInspection(command: "ast" | "explain", args: readonly string[], cwd:
     options = parseInspectionArgs(args, cwd);
   } catch (error) {
     return emitFatal(error, false, isJsonFlag(args));
+  }
+
+  if (command === "explain" && isErrorCode(options.input)) {
+    process.stderr.write(
+      "error: explanations are not bundled in this build; see spec-v0.1.md §14 or spec-v0.2.md §6\n",
+    );
+    return 1;
   }
 
   let resolved;
@@ -766,9 +791,7 @@ function runInspection(command: "ast" | "explain", args: readonly string[], cwd:
       `${JSON.stringify({ ...response, diagnostics }, null, 2)}\n`,
     );
   } else {
-    for (const diagnostic of diagnostics) {
-      printDiagnostic(diagnostic);
-    }
+    printDiagnostics(diagnostics);
     if (!hasError) {
       if (command === "ast") {
         const ast = (response as AstResponse).ast;
@@ -1199,6 +1222,138 @@ function collectSourceFiles(inputPath: string, cwd: string): readonly SourceFile
   );
 }
 
+function changeManifestEdition(
+  filePath: string,
+): { readonly changed: boolean } | { readonly error: string } {
+  let directory = dirname(resolve(filePath));
+
+  for (;;) {
+    for (const name of ["core.toml", "core.json"]) {
+      const candidate = join(directory, name);
+      if (!existsSync(candidate)) {
+        continue;
+      }
+
+      try {
+        const text = readFileSync(candidate, "utf8");
+        const updated = text
+          .replace('edition = "0.1"', 'edition = "0.2"')
+          .replace('"edition": "0.1"', '"edition": "0.2"');
+        if (updated === text) {
+          return { changed: false };
+        }
+        writeFileSync(candidate, updated, "utf8");
+        return { changed: true };
+      } catch (error) {
+        return { error: errorMessage(error) };
+      }
+    }
+
+    const parent = dirname(directory);
+    if (parent === directory) {
+      return { changed: false };
+    }
+    directory = parent;
+  }
+}
+
+function runMigrate(args: readonly string[], cwd: string): number {
+  if (args.includes("-h") || args.includes("--help")) {
+    printHelp();
+    return 0;
+  }
+
+  const check = args.includes("--check");
+  const dryRun = args.includes("--dry-run");
+  const json = args.includes("--json");
+  const changeEdition = args.includes("--change-edition");
+  const input = resolve(cwd, args.find((arg) => !arg.startsWith("-")) ?? ".");
+
+  let files: readonly SourceFile[];
+  try {
+    files = collectSourceFiles(input, cwd).filter((file) => file.kind === "source");
+  } catch (error) {
+    return emitFatal(error, false, json);
+  }
+
+  const client = new CompilerClient({ cwd });
+  let failures = 0;
+  let changed = 0;
+
+  for (const file of files) {
+    let text: string;
+    try {
+      text = readFileSync(file.path, "utf8");
+    } catch (error) {
+      process.stderr.write(`astra: ${file.displayPath}: ${errorMessage(error)}\n`);
+      failures += 1;
+      continue;
+    }
+
+    let result: MigrateResponse;
+    try {
+      result = client.migrate({
+        source: { path: file.displayPath, text },
+        changeEdition,
+      });
+    } catch (error) {
+      return emitFatal(error, false, json);
+    }
+
+    for (const diagnostic of result.diagnostics) {
+      const reported = reportDiagnostic(file, text, diagnostic);
+      if (json) {
+        process.stdout.write(`${JSON.stringify(reported)}\n`);
+      } else {
+        process.stderr.write(`${renderDiagnostic(reported)}\n`);
+      }
+    }
+
+    if (!result.ok) {
+      failures += 1;
+    }
+    if (result.changed) {
+      changed += 1;
+    }
+
+    if (json) {
+      process.stdout.write(
+        `${JSON.stringify({
+          changed: result.changed,
+          diagnostics: result.diagnostics,
+          path: file.displayPath,
+          source: dryRun ? result.source : "",
+        })}\n`,
+      );
+    } else if (dryRun) {
+      process.stdout.write(`${result.source}\n`);
+    } else if (!check && result.changed) {
+      try {
+        writeFileSync(file.path, result.source, "utf8");
+      } catch (error) {
+        process.stderr.write(`astra: ${file.displayPath}: ${errorMessage(error)}\n`);
+        failures += 1;
+      }
+    }
+
+    if (check && result.changed) {
+      process.stdout.write(`would migrate ${file.displayPath}\n`);
+    }
+
+    if (changeEdition) {
+      const outcome = changeManifestEdition(file.path);
+      if ("error" in outcome) {
+        process.stderr.write(`astra: manifest edition: ${outcome.error}\n`);
+        failures += 1;
+      } else if (outcome.changed) {
+        process.stdout.write("updated edition in nearest manifest\n");
+      }
+    }
+  }
+
+  return failures > 0 || (check && changed > 0) ? 1 : 0;
+}
+
 function lineColumn(
   source: string,
   byteOffset: number,
@@ -1222,7 +1377,7 @@ function reportDiagnostic(
       ? lineColumn(source, diagnostic.span.start)
       : { line: null, column: null };
 
-  return {
+  let reported: ReportedDiagnostic = {
     code: diagnostic.code,
     severity: diagnostic.severity,
     message: diagnostic.message,
@@ -1231,6 +1386,33 @@ function reportDiagnostic(
     line: position.line,
     column: position.column,
   };
+
+  const related = (diagnostic.related ?? []).map((entry) => {
+    const sameFile = entry.file === "" || entry.file === file.displayPath;
+    const relatedPosition =
+      sameFile && source !== null
+        ? lineColumn(source, entry.span.start)
+        : { line: null, column: null };
+    const mapped: ReportedRelated = {
+      file: entry.file === "" ? file.displayPath : entry.file,
+      start: entry.span.start,
+      end: entry.span.end,
+      message: entry.message,
+    };
+    return relatedPosition.line === null
+      ? mapped
+      : { ...mapped, line: relatedPosition.line, column: relatedPosition.column ?? 1 };
+  });
+
+  if (related.length > 0) {
+    reported = { ...reported, related };
+  }
+
+  if (source !== null && diagnostic.span !== null) {
+    diagnosticSources.set(reported, { span: diagnostic.span, source });
+  }
+
+  return reported;
 }
 
 function errorDiagnostic(error: unknown, path: string | null = null): ReportedDiagnostic {
@@ -1293,18 +1475,104 @@ function errorDiagnostic(error: unknown, path: string | null = null): ReportedDi
   };
 }
 
-function printDiagnostic(diagnostic: ReportedDiagnostic): void {
-  const location =
-    diagnostic.path === null
-      ? null
-      : diagnostic.line === null
-        ? diagnostic.path
-        : `${diagnostic.path}:${diagnostic.line}:${diagnostic.column ?? 1}`;
-  const prefix = location === null ? "" : `${location}: `;
-  const help = diagnostic.hint === null ? "" : `\n  help: ${diagnostic.hint}`;
+const diagnosticSources = new WeakMap<
+  ReportedDiagnostic,
+  { readonly span: NonNullable<CompilerDiagnostic["span"]>; readonly source: string }
+>();
 
+function byteOffsetToIndex(source: string, byteOffset: number): number {
+  const bytes = Buffer.from(source, "utf8");
+  const end = Math.max(0, Math.min(byteOffset, bytes.length));
+  return bytes.subarray(0, end).toString("utf8").length;
+}
+
+function snippetLines(
+  source: string,
+  start: number,
+  end: number,
+  line: number,
+): string | null {
+  const startIndex = byteOffsetToIndex(source, start);
+  if (startIndex > source.length) {
+    return null;
+  }
+  const endIndex = Math.min(
+    byteOffsetToIndex(source, Math.max(end, start)),
+    source.length,
+  );
+  const lineStart = startIndex === 0 ? 0 : source.lastIndexOf("\n", startIndex - 1) + 1;
+  const newline = source.indexOf("\n", startIndex);
+  const lineEnd = newline === -1 ? source.length : newline;
+  const sourceLine = source.slice(lineStart, lineEnd).replace(/\r+$/, "");
+  const column = [...source.slice(lineStart, startIndex)].length;
+  const carets = Math.max(
+    [...source.slice(startIndex, Math.min(endIndex, lineEnd))].length,
+    1,
+  );
+  const gutter = " ".repeat(String(line).length);
+
+  return [
+    `${gutter} |`,
+    `${String(line).padStart(gutter.length)} | ${sourceLine}`,
+    `${gutter} | ${" ".repeat(column)}${"^".repeat(carets)}`,
+  ].join("\n");
+}
+
+function renderDiagnostic(diagnostic: ReportedDiagnostic): string {
+  const gutter = " ".repeat(diagnostic.line === null ? 1 : String(diagnostic.line).length);
+  const lines = [`${diagnostic.severity}[${diagnostic.code}]: ${diagnostic.message}`];
+
+  if (diagnostic.path !== null) {
+    let location = `${gutter}--> ${diagnostic.path}`;
+    if (diagnostic.line !== null) {
+      location += `:${diagnostic.line}:${diagnostic.column ?? 1}`;
+    }
+    lines.push(location);
+  }
+
+  const entry = diagnosticSources.get(diagnostic);
+  const snippet =
+    entry === undefined || diagnostic.line === null
+      ? null
+      : snippetLines(entry.source, entry.span.start, entry.span.end, diagnostic.line);
+  if (snippet !== null) {
+    lines.push(snippet);
+  }
+
+  if (diagnostic.hint !== null) {
+    if (snippet !== null) {
+      lines.push(`${gutter} |`);
+    }
+    lines.push(`${gutter} = help: ${diagnostic.hint}`);
+  }
+
+  for (const related of diagnostic.related ?? []) {
+    lines.push(`note: ${related.message}`);
+    const location =
+      related.line === undefined
+        ? related.file
+        : `${related.file}:${related.line}:${related.column ?? 1}`;
+    lines.push(`${gutter}--> ${location}`);
+  }
+
+  return lines.join("\n");
+}
+
+function printDiagnostics(diagnostics: readonly ReportedDiagnostic[]): void {
+  for (const diagnostic of diagnostics) {
+    process.stderr.write(`${renderDiagnostic(diagnostic)}\n`);
+  }
+
+  const errors = diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
+  if (errors === 0) {
+    return;
+  }
+
+  process.stderr.write("\n");
   process.stderr.write(
-    `${prefix}${diagnostic.severity}[${diagnostic.code}]: ${diagnostic.message}${help}\n`,
+    errors === 1
+      ? "error: aborting due to previous error\n"
+      : `error: aborting due to ${errors} previous errors\n`,
   );
 }
 
@@ -1339,7 +1607,7 @@ function emitFatal(error: unknown, check: boolean, json: boolean): number {
   if (json) {
     reportJson(check, [], [diagnostic]);
   } else {
-    printDiagnostic(diagnostic);
+    printDiagnostics([diagnostic]);
   }
 
   return 1;
@@ -1547,17 +1815,13 @@ async function runFmt(args: readonly string[], cwd: string): Promise<number> {
     if (options.json) {
       reportJson(options.check, results, allDiagnostics);
     } else {
-      for (const diagnostic of allDiagnostics) {
-        printDiagnostic(diagnostic);
-      }
+      printDiagnostics(allDiagnostics);
     }
     return 1;
   }
 
   if (!options.json) {
-    for (const diagnostic of allDiagnostics) {
-      printDiagnostic(diagnostic);
-    }
+    printDiagnostics(allDiagnostics);
   }
 
   if (options.check) {
@@ -1941,7 +2205,7 @@ async function runBuild(args: readonly string[], cwd: string): Promise<number> {
         diagnostics: [diagnostic],
       });
     } else {
-      printDiagnostic(diagnostic);
+      printDiagnostics([diagnostic]);
     }
     return 1;
   }
@@ -2176,7 +2440,7 @@ async function runBuild(args: readonly string[], cwd: string): Promise<number> {
             : { importMap: linkedPackages.importMap }),
         });
         diagnostics = project.diagnostics.map((diagnostic) =>
-          reportDiagnostic(sourceFile, source, diagnostic),
+          reportDiagnostic(sourceFile, null, diagnostic),
         );
         files = [];
         for (const module of project.modules) {
@@ -2210,9 +2474,7 @@ async function runBuild(args: readonly string[], cwd: string): Promise<number> {
         if (options.json) {
           printBuildReport(report);
         } else {
-          for (const diagnostic of diagnostics) {
-            printDiagnostic(diagnostic);
-          }
+          printDiagnostics(diagnostics);
         }
         return 1;
       }
@@ -2510,9 +2772,7 @@ async function runBuild(args: readonly string[], cwd: string): Promise<number> {
       if (options.json) {
         printBuildReport(report);
       } else {
-        for (const diagnostic of diagnostics) {
-          printDiagnostic(diagnostic);
-        }
+        printDiagnostics(diagnostics);
         process.stdout.write(
           `built ${targetName} -> ${displayPath(outputPath, cwd)}\n`,
         );
@@ -2553,9 +2813,7 @@ async function runBuild(args: readonly string[], cwd: string): Promise<number> {
       if (options.json) {
         printBuildReport(report);
       } else {
-        for (const diagnostic of diagnostics) {
-          printDiagnostic(diagnostic);
-        }
+        printDiagnostics(diagnostics);
       }
       return 1;
     }
@@ -2662,9 +2920,7 @@ async function runBuild(args: readonly string[], cwd: string): Promise<number> {
       if (options.json) {
         printBuildReport(report);
       } else {
-        for (const diagnostic of allDiagnostics) {
-          printDiagnostic(diagnostic);
-        }
+        printDiagnostics(allDiagnostics);
       }
       return 1;
     }
@@ -2780,9 +3036,7 @@ async function runBuild(args: readonly string[], cwd: string): Promise<number> {
     if (options.json) {
       printBuildReport(report);
     } else {
-      for (const diagnostic of allDiagnostics) {
-        printDiagnostic(diagnostic);
-      }
+      printDiagnostics(allDiagnostics);
       process.stdout.write(`built ${targetName} -> ${displayPath(outputPath, cwd)}\n`);
     }
     return 0;
@@ -2792,7 +3046,7 @@ async function runBuild(args: readonly string[], cwd: string): Promise<number> {
     if (options.json) {
       printBuildReport(report);
     } else {
-      printDiagnostic(diagnostic);
+      printDiagnostics([diagnostic]);
     }
     return 1;
   }
@@ -2839,7 +3093,7 @@ async function runDoctor(args: readonly string[], cwd: string): Promise<number> 
     if (json) {
       process.stdout.write(JSON.stringify({ ok: false, error: diagnostic }, null, 2) + "\n");
     } else {
-      process.stderr.write(`${diagnostic.code}: ${diagnostic.message}\n`);
+      printDiagnostics([diagnostic]);
     }
     return 1;
   }
@@ -2865,6 +3119,8 @@ export async function runCli(args: readonly string[], cwd = process.cwd()): Prom
       return runCheck(rest, cwd);
     case "fmt":
       return runFmt(rest, cwd);
+    case "migrate":
+      return runMigrate(rest, cwd);
     case "build":
       return await runBuild(rest, cwd);
     case "ast":

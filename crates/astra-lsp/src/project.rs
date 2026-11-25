@@ -7,6 +7,7 @@ use astra_compiler_api::{
     ProjectSourceUnit, SourceUnit, check_project,
 };
 use astra_core::diagnostic::Diagnostic;
+use astra_core::edition::Edition;
 
 const MAX_PROJECT_FILES: usize = 2048;
 const MAX_PROJECT_DEPTH: usize = 32;
@@ -95,6 +96,7 @@ impl ProjectSnapshot {
             api_version: API_VERSION.to_owned(),
             sources: units,
             target: "js".to_owned(),
+            edition: Edition::V0_1,
             mode: None,
             integer_policy: Default::default(),
         });
@@ -136,6 +138,7 @@ impl ProjectSnapshot {
                     text: module.text.clone(),
                 },
                 target: "js".to_owned(),
+                edition: Edition::V0_1,
                 mode: None,
                 integer_policy: Default::default(),
             });
@@ -170,6 +173,7 @@ impl ProjectSnapshot {
                 text: text.to_owned(),
             },
             target: "js".to_owned(),
+            edition: Edition::V0_1,
             mode: None,
             integer_policy: Default::default(),
         });

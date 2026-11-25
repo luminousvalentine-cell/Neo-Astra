@@ -1,0 +1,254 @@
+//! Standalone error-code regression runner for Neo Astra.
+//!
+//! Build and run from the repository root:
+//!
+//!   rustc scripts/run.rs1 -o run-errors
+//!   ./run-errors                       # conformance/errors
+//!   ./run-errors --all                 # also conformance/rejects and v0.2 invalid
+//!   ./run-errors --coverage            # print ledger codes not covered by cases
+//!
+//! The runner uses only std. It shells out to the native CLI and reads text
+//! from `--json` output with a small scanner, so no JSON crate is required.
+
+use std::collections::BTreeSet;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn codes_in(text: &str) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    let needle = "\"code\": \"";
+    let mut rest = text;
+    while let Some(index) = rest.find(needle) {
+        rest = &rest[index + needle.len()..];
+        let end = rest.find('"').unwrap_or(rest.len());
+        let code = &rest[..end];
+        if code.len() == 6 && code.as_bytes()[0..2].iter().all(u8::is_ascii_uppercase)
+            && code.as_bytes()[2..].iter().all(u8::is_ascii_digit)
+        {
+            found.insert(code.to_owned());
+        }
+        rest = &rest[end.min(rest.len())..];
+    }
+    found
+}
+
+fn expected_codes(path: &Path) -> Vec<String> {
+    let text = fs::read_to_string(path).unwrap_or_default();
+    let text = text.trim_start_matches('\u{feff}');
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn edition_of(source: &str) -> &'static str {
+    if source
+        .lines()
+        .take(5)
+        .any(|line| line.trim().trim_start_matches('\u{feff}') == "// edition: 0.2")
+    {
+        "0.2"
+    } else {
+        "0.1"
+    }
+}
+
+struct Options {
+    root: PathBuf,
+    cases: Vec<PathBuf>,
+    coverage: bool,
+}
+
+fn parse_args() -> Options {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let mut root = PathBuf::from(".");
+    let mut coverage = false;
+    let mut all = false;
+    let mut explicit: Option<PathBuf> = None;
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--root" => {
+                index += 1;
+                if index >= args.len() {
+                    eprintln!("--root requires a directory");
+                    std::process::exit(2);
+                }
+                root = PathBuf::from(&args[index]);
+            }
+            "--coverage" => coverage = true,
+            "--all" => all = true,
+            other if other.starts_with("--") => {
+                eprintln!("unknown option: {other}");
+                std::process::exit(2);
+            }
+            other => explicit = Some(PathBuf::from(other)),
+        }
+        index += 1;
+    }
+
+    let mut cases = Vec::new();
+    if let Some(path) = explicit {
+        cases.push(path);
+    } else {
+        cases.push(root.join("conformance/errors"));
+        if all {
+            cases.push(root.join("conformance/rejects"));
+            cases.push(root.join("conformance/v0.2/invalid"));
+        }
+    }
+    Options { root, cases, coverage }
+}
+
+fn binary(root: &Path) -> PathBuf {
+    if let Ok(path) = env::var("ASTRA_BIN") {
+        return PathBuf::from(path);
+    }
+    let name = if cfg!(windows) { "astra-native.exe" } else { "astra-native" };
+    root.join("target/debug").join(name)
+}
+
+fn mode_of(source: &str) -> Option<String> {
+    for line in source.lines().take(5) {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        if let Some(rest) = line.strip_prefix("// conformance:") {
+            if let Some(value) = rest.trim().strip_prefix("mode=") {
+                return Some(value.trim().to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn run_case(binary: &Path, root: &Path, source_path: &Path, counter: usize) -> (bool, Vec<String>, BTreeSet<String>) {
+    let source = fs::read_to_string(source_path).unwrap_or_default();
+    let source = source.trim_start_matches('\u{feff}');
+    let codes_path = source_path.with_extension("codes");
+    let expected = expected_codes(&codes_path);
+    let edition = edition_of(&source);
+
+    let project = env::temp_dir().join(format!(
+        "astra-error-runner-{}-{counter}",
+        std::process::id()
+    ));
+    let _ = fs::create_dir_all(&project);
+    let manifest = format!("[package]\nname = \"cases\"\nedition = \"{edition}\"\n");
+    let _ = fs::write(project.join("core.toml"), manifest);
+    let _ = fs::write(project.join("main.ns"), &source);
+
+    let mut command = Command::new(binary);
+    command
+        .arg("check")
+        .arg(project.join("main.ns"))
+        .arg("--json");
+    // The conformance corpus defaults to core mode; `// conformance: mode=`
+    // overrides it in the shared runner and in this one.
+    command
+        .arg("--mode")
+        .arg(mode_of(&source).unwrap_or_else(|| "core".to_owned()));
+    let output = command.current_dir(root).output();
+    let _ = fs::remove_dir_all(&project);
+
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("  cannot run compiler: {error}");
+            return (false, expected, BTreeSet::new());
+        }
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let actual = codes_in(&text);
+    let missing = expected
+        .iter()
+        .filter(|code| !actual.contains(*code))
+        .cloned()
+        .collect::<Vec<_>>();
+    (missing.is_empty(), expected, actual)
+}
+
+fn coverage_report(root: &Path, covered: &BTreeSet<String>) {
+    let ledger = fs::read_to_string(root.join("Docs/error-code-ledger.md")).unwrap_or_default();
+    let all = codes_in_text(&ledger);
+    let missing: Vec<&String> = all.iter().filter(|code| !covered.contains(*code)).collect();
+    println!("\ncoverage: {}/{} ledger codes exercised by these cases", covered.len(), all.len());
+    if !missing.is_empty() {
+        println!("not covered by source cases:");
+        for code in missing {
+            println!("  {code}");
+        }
+        println!("\nNP/NR/NV/PG, CLI, and backend codes are exercised by their own suites.");
+    }
+}
+
+fn codes_in_text(text: &str) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index + 6 <= bytes.len() {
+        if matches!(&bytes[index..index + 2], b"NS" | b"NP" | b"NR" | b"NV" | b"PG")
+            && bytes[index + 2..index + 6].iter().all(u8::is_ascii_digit)
+        {
+            if let Ok(code) = std::str::from_utf8(&bytes[index..index + 6]) {
+                found.insert(code.to_owned());
+            }
+        }
+        index += 1;
+    }
+    found
+}
+
+fn main() {
+    let options = parse_args();
+    let compiler = binary(&options.root);
+    if !compiler.exists() {
+        eprintln!("compiler not found: {}", compiler.display());
+        eprintln!("run `cargo build -p astra-cli --bin astra-native` first");
+        std::process::exit(2);
+    }
+
+    let mut total = 0usize;
+    let mut failed = 0usize;
+    let mut covered = BTreeSet::new();
+
+    let mut counter = 0;
+    for directory in &options.cases {
+        let Ok(entries) = fs::read_dir(directory) else {
+            eprintln!("cannot read {}", directory.display());
+            continue;
+        };
+        println!("== {} ==", directory.display());
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("ns") {
+                continue;
+            }
+            if !path.with_extension("codes").exists() {
+                continue;
+            }
+            total += 1;
+            counter += 1;
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+            let (ok, expected, actual) = run_case(&compiler, &options.root, &path, counter);
+            covered.extend(actual.iter().cloned());
+            covered.extend(expected.iter().cloned());
+            if ok {
+                println!("PASS  {name}");
+            } else {
+                failed += 1;
+                println!("FAIL  {name}  expected {:?}, got {:?}", expected, actual);
+            }
+        }
+    }
+
+    println!("\n{total} cases, {failed} failed");
+    if options.coverage {
+        coverage_report(&options.root, &covered);
+    }
+    if failed > 0 {
+        std::process::exit(1);
+    }
+}

@@ -1446,27 +1446,29 @@ impl<'m, 's, 'r> ModulePass<'m, 's, 'r> {
     fn check_type_path_leak(&mut self, owner: &str, path: &TypePath, generics: &BTreeSet<String>) {
         let name = &path.segments[0];
         if !generics.contains(name) {
-            let leaked = if path.segments.len() == 1 {
+            let private = if path.segments.len() == 1 {
                 self.symbols
                     .types
                     .get(name)
-                    .is_some_and(|symbol| symbol.visibility == Visibility::Private)
+                    .filter(|symbol| symbol.visibility == Visibility::Private)
             } else {
                 self.symbols
-                    .namespaces
+                    .types
                     .get(name)
                     .into_iter()
-                    .chain(self.symbols.types.get(name))
-                    .any(|symbol| symbol.visibility == Visibility::Private)
+                    .chain(self.symbols.namespaces.get(name))
+                    .find(|symbol| symbol.visibility == Visibility::Private)
             };
 
-            if leaked {
-                self.error(
+            if let Some(symbol) = private {
+                let diagnostic = Diagnostic::error(
                     PRIVATE_LEAK,
                     format!("Private declaration '{name}' leaks through public API '{owner}'."),
-                    path.span,
-                    "Export the private declaration or keep the API private.",
-                );
+                )
+                .with_span(path.span)
+                .with_hint("Export the private declaration or keep the API private.")
+                .with_related(String::new(), symbol.span, "Private declaration.");
+                self.diagnostics.push(diagnostic);
             }
         }
 

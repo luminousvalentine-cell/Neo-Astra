@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::ast;
 use crate::diagnostic::Diagnostic;
+use crate::edition::Edition;
 use crate::hir;
 use crate::mode::Mode;
+use crate::parser::{ParseOptions, parse_with_options};
 use crate::resolver::resolve_module;
 use crate::span::Span;
 use crate::type_surface::{ImportedTypeDef, ModuleTypeSurface};
@@ -27,6 +29,7 @@ const INVALID_STRUCT_FIELD: &str = "NS4016";
 const INVALID_PATTERN: &str = "NS4017";
 const INVALID_TYPE_ARGUMENT: &str = "NS4018";
 const TASK_BOUNDARY: &str = "NS4019";
+const BARE_TYPE_ARGUMENTS: &str = "NS2010";
 const MODE_REQUIREMENT: &str = "NS5001";
 const MODE_WIDENING: &str = "NS5002";
 const CAPABILITY_REQUIREMENT: &str = "NS5003";
@@ -49,6 +52,8 @@ const EXPORT_AS_SYMBOL: &str = "NS7013";
 
 #[derive(Debug, Clone, Default)]
 pub struct CheckOptions {
+    pub edition: Edition,
+
     pub mode: Mode,
 
     pub target: Option<String>,
@@ -60,10 +65,17 @@ impl CheckOptions {
     #[must_use]
     pub fn new(mode: Mode) -> Self {
         Self {
+            edition: Edition::V0_1,
             mode,
             target: None,
             module_surfaces: BTreeMap::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_edition(mut self, edition: Edition) -> Self {
+        self.edition = edition;
+        self
     }
 
     #[must_use]
@@ -75,6 +87,7 @@ impl CheckOptions {
     #[must_use]
     pub fn with_surfaces(mode: Mode, module_surfaces: BTreeMap<String, ModuleTypeSurface>) -> Self {
         Self {
+            edition: Edition::V0_1,
             mode,
             target: None,
             module_surfaces,
@@ -84,7 +97,8 @@ impl CheckOptions {
 
 impl PartialEq for CheckOptions {
     fn eq(&self, other: &Self) -> bool {
-        self.mode == other.mode
+        self.edition == other.edition
+            && self.mode == other.mode
             && self.target == other.target
             && self.module_surfaces == other.module_surfaces
     }
@@ -108,7 +122,12 @@ pub struct CheckResult {
 }
 
 pub fn check_source(source: &str, options: CheckOptions) -> Result<CheckResult, Vec<Diagnostic>> {
-    let module = crate::parser::parse(source)?;
+    let module = parse_with_options(
+        source,
+        ParseOptions {
+            edition: options.edition,
+        },
+    )?;
     check_module(&module, options)
 }
 
@@ -149,11 +168,18 @@ struct Local {
 #[derive(Debug, Clone)]
 struct ValueDef {
     ty: Type,
+
+    span: Option<Span>,
 }
 
 impl ValueDef {
     fn new(ty: Type) -> Self {
-        Self { ty }
+        Self { ty, span: None }
+    }
+
+    fn with_span(mut self, span: Span) -> Self {
+        self.span = Some(span);
+        self
     }
 }
 
@@ -181,6 +207,7 @@ struct StructDef {
 struct EnumDef {
     type_parameters: Vec<String>,
     variants: Vec<ast::EnumVariant>,
+    span: Option<Span>,
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +245,9 @@ struct FunctionContext {
     name: String,
     return_type: Type,
     declared_errors: Vec<Type>,
+    span: Span,
+
+    error_set_span: Option<Span>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,6 +309,8 @@ struct Coverage {
     err: bool,
     boolean: [bool; 2],
     variants: BTreeSet<String>,
+    err_members: BTreeSet<String>,
+    err_wildcard: bool,
 }
 
 enum MatchShape {
@@ -333,6 +365,8 @@ struct Checker<'a> {
     type_defs: BTreeMap<String, TypeDef>,
     imported_types: BTreeSet<String>,
     values: BTreeMap<String, ValueDef>,
+
+    variant_owners: BTreeMap<String, String>,
     namespaces: BTreeMap<String, NamespaceDef>,
     script_modes: BTreeMap<String, Mode>,
     scopes: Vec<BTreeMap<String, Local>>,
@@ -361,6 +395,7 @@ impl<'a> Checker<'a> {
             type_defs: BTreeMap::new(),
             imported_types: BTreeSet::new(),
             values: BTreeMap::new(),
+            variant_owners: BTreeMap::new(),
             namespaces: BTreeMap::new(),
             script_modes: BTreeMap::new(),
             scopes: Vec::new(),
@@ -420,6 +455,7 @@ impl<'a> Checker<'a> {
                         TypeDef::Enum(EnumDef {
                             type_parameters: declaration.type_parameters.clone(),
                             variants: declaration.variants.clone(),
+                            span: Some(item.span),
                         }),
                     );
                 }
@@ -455,7 +491,7 @@ impl<'a> Checker<'a> {
                     let signature = self.function_signature(declaration);
                     self.values.insert(
                         declaration.name.clone(),
-                        ValueDef::new(Type::Function(signature.clone())),
+                        ValueDef::new(Type::Function(signature.clone())).with_span(item.span),
                     );
                     self.resolved.items[index].ty = Some(Type::Function(signature));
                 }
@@ -483,13 +519,14 @@ impl<'a> Checker<'a> {
                             };
                             self.values.insert(
                                 declaration.name.clone(),
-                                ValueDef::new(Type::Function(signature)),
+                                ValueDef::new(Type::Function(signature)).with_span(item.span),
                             );
                         }
                     }
                     self.resolved.items[index].ty = Some(ty);
                 }
                 hir::Declaration::Enum(declaration) => {
+                    let generics = generic_map(&declaration.type_parameters);
                     let ty = Type::Named(
                         declaration.name.clone(),
                         declaration
@@ -498,6 +535,31 @@ impl<'a> Checker<'a> {
                             .map(|parameter| Type::Generic(parameter.clone()))
                             .collect(),
                     );
+                    for variant in &declaration.variants {
+                        if self.options.edition != Edition::V0_2 {
+                            continue;
+                        }
+                        self.variant_owners
+                            .insert(variant.name.clone(), declaration.name.clone());
+                        let value_ty = match &variant.fields {
+                            Some(fields) if !fields.is_empty() => {
+                                let parameters = fields
+                                    .iter()
+                                    .map(|field| self.resolve_type(&field.ty, &generics))
+                                    .collect::<Vec<_>>();
+                                Type::Function(FunctionType {
+                                    type_parameters: declaration.type_parameters.clone(),
+                                    parameters,
+                                    return_type: Box::new(ty.clone()),
+                                    errors: Vec::new(),
+                                })
+                            }
+                            _ => ty.clone(),
+                        };
+                        self.values
+                            .entry(variant.name.clone())
+                            .or_insert(ValueDef::new(value_ty));
+                    }
                     self.resolved.items[index].ty = Some(ty);
                 }
                 hir::Declaration::Constant(declaration) => {
@@ -676,6 +738,7 @@ impl<'a> Checker<'a> {
                             TypeDef::Enum(EnumDef {
                                 type_parameters,
                                 variants,
+                                span: None,
                             }),
                         );
                         let ty = Type::Named(enum_name, Vec::new());
@@ -849,6 +912,12 @@ impl<'a> Checker<'a> {
                 name: declaration.name.clone(),
                 return_type: (*signature.return_type).clone(),
                 declared_errors: signature.errors.clone(),
+                span: declaration.span,
+                error_set_span: declaration
+                    .error_set
+                    .first()
+                    .zip(declaration.error_set.last())
+                    .map(|(first, last)| Span::new(first.span.start, last.span.end)),
             });
 
             let body = self.check_block(&declaration.body, false, None);
@@ -2280,7 +2349,24 @@ impl<'a> Checker<'a> {
                 for argument in arguments {
                     let _ = self.resolve_type(argument, &BTreeMap::new());
                 }
-                self.check_expr(target, expected)
+                let info = self.check_expr(target, expected);
+                if self.options.edition == Edition::V0_2 {
+                    let unit_variant = match &target.kind {
+                        ast::ExprKind::Identifier(name) => {
+                            name == "None" || self.variant_owners.contains_key(name)
+                        }
+                        _ => false,
+                    };
+                    if !unit_variant {
+                        self.error(
+                            BARE_TYPE_ARGUMENTS,
+                            "Type arguments on a value require a call or constructor.",
+                            expression.span,
+                            "Write path::<T>(value) or use a unit variant such as None::<T>.",
+                        );
+                    }
+                }
+                info
             }
             ast::ExprKind::Propagate(inner) => self.check_propagation(inner, expression.span),
             ast::ExprKind::Array(elements) => self.check_array(elements, expression.span, expected),
@@ -2676,16 +2762,23 @@ impl<'a> Checker<'a> {
         };
 
         if function.parameters.len() != arguments.len() {
-            self.error(
+            let mut diagnostic = Diagnostic::error(
                 ARGUMENT_COUNT,
                 format!(
                     "Function expects {} argument(s), but {} were provided.",
                     function.parameters.len(),
                     arguments.len()
                 ),
-                span,
-                "Match the declared function signature.",
-            );
+            )
+            .with_span(span)
+            .with_hint("Match the declared function signature.");
+            if let Some(name) = callee_identifier(callee)
+                && let Some(declaration) = self.values.get(&name).and_then(|value| value.span)
+            {
+                diagnostic =
+                    diagnostic.with_related(String::new(), declaration, "Function defined here.");
+            }
+            self.diagnostics.push(diagnostic);
         }
 
         let mut substitutions = BTreeMap::new();
@@ -2720,7 +2813,9 @@ impl<'a> Checker<'a> {
                 }
             });
             let expected_argument = expected_argument.flatten();
-            let info = self.check_expr(argument, expected_argument.as_ref());
+
+            let info = self.check_expr_inner(argument, expected_argument.as_ref());
+            self.annotate(argument.span, info.ty.clone());
             append_effects(&mut errors, info.errors.clone());
             argument_infos.push(info);
         }
@@ -2753,7 +2848,15 @@ impl<'a> Checker<'a> {
             }
             let parameter = parameter.substitute(&substitutions);
             if !parameter.accepts(&argument.ty) && !parameter.is_opaque() {
-                self.type_mismatch(&parameter, &argument.ty, arguments[index].span);
+                let related = callee_identifier(callee)
+                    .and_then(|name| self.values.get(&name).and_then(|value| value.span))
+                    .map(|declaration| (declaration, "Function defined here."));
+                self.type_mismatch_with_related(
+                    &parameter,
+                    &argument.ty,
+                    arguments[index].span,
+                    related,
+                );
             }
         }
 
@@ -3298,7 +3401,11 @@ impl<'a> Checker<'a> {
                 INVALID_PROPAGATION,
                 format!("Expression of type '{}' is not fallible.", info.ty),
                 span,
-                "Use '!' only on fallible calls or Result values.",
+                if self.options.edition == Edition::V0_2 {
+                    "Use '?' only on fallible calls or Result values."
+                } else {
+                    "Use '!' only on fallible calls or Result values."
+                },
             );
         }
         ExprInfo::value(info.ty)
@@ -3657,15 +3764,54 @@ impl<'a> Checker<'a> {
                 };
                 Type::Result(Box::new(scrutinee.ty.clone()), Box::new(error))
             };
+        let top_level_catch_all = arms
+            .iter()
+            .any(|arm| pattern_is_catch_all(&arm.pattern, &scrutinee_type));
+        let declared_members = error_members(&scrutinee.ty, &effect_types);
+        if !coverage.err_members.is_empty()
+            && !coverage.err_wildcard
+            && !top_level_catch_all
+            && !declared_members.is_empty()
+        {
+            let missing_members = declared_members
+                .iter()
+                .filter_map(type_name)
+                .filter(|name| !coverage.err_members.contains(*name))
+                .collect::<Vec<_>>();
+            if !missing_members.is_empty() {
+                let mut diagnostic = Diagnostic::error(
+                    NON_EXHAUSTIVE_MATCH,
+                    format!(
+                        "Non-exhaustive match: missing Err member(s) {}.",
+                        missing_members.join(", ")
+                    ),
+                )
+                .with_span(span)
+                .with_hint(
+                    "Add an Err arm for every declared error member, or a final wildcard arm.",
+                );
+                if let Some(declaration) = self.enum_declaration_span(&scrutinee.ty) {
+                    diagnostic =
+                        diagnostic.with_related(String::new(), declaration, "Enum declared here.");
+                }
+                self.diagnostics.push(diagnostic);
+            }
+        }
+
         let patterns = arms.iter().map(|arm| &arm.pattern).collect::<Vec<_>>();
         if !self.patterns_are_exhaustive(&patterns, &scrutinee_type) {
             let missing = coverage.missing(&shape);
-            self.error(
+            let mut diagnostic = Diagnostic::error(
                 NON_EXHAUSTIVE_MATCH,
                 format!("Non-exhaustive match: missing {}.", missing.join(", ")),
-                span,
-                "Add the missing case(s) or a wildcard arm.",
-            );
+            )
+            .with_span(span)
+            .with_hint("Add the missing case(s) or a wildcard arm.");
+            if let Some(declaration) = self.enum_declaration_span(&scrutinee_type) {
+                diagnostic =
+                    diagnostic.with_related(String::new(), declaration, "Enum declared here.");
+            }
+            self.diagnostics.push(diagnostic);
         }
 
         let ty = if diverges {
@@ -3946,10 +4092,135 @@ impl<'a> Checker<'a> {
                     }
                     "Err" => {
                         coverage.err = true;
-                        let (_, error) = result_parts(ty, effects);
-                        self.check_pattern_arguments(arguments, &[error], pattern.span, coverage);
+                        let members = error_members(ty, effects);
+                        let union = if members.len() == 1 {
+                            members[0].clone()
+                        } else {
+                            Type::Unknown
+                        };
+
+                        if arguments.len() != 1 {
+                            self.check_pattern_arguments(
+                                arguments,
+                                &[union],
+                                pattern.span,
+                                coverage,
+                            );
+                            return;
+                        }
+
+                        match &arguments[0].kind {
+                            ast::PatternKind::Wildcard => {
+                                coverage.err_wildcard = true;
+                            }
+                            ast::PatternKind::Identifier(name) => {
+                                coverage.err_wildcard = true;
+                                self.insert_local(
+                                    name.clone(),
+                                    Local {
+                                        ty: union,
+                                        mutable: false,
+                                        span: arguments[0].span,
+                                    },
+                                );
+                            }
+                            ast::PatternKind::Constructor {
+                                path,
+                                arguments: inner,
+                            } => {
+                                let member_name = path.segments.last().cloned().unwrap_or_default();
+                                if let Some(member_type) = members
+                                    .iter()
+                                    .find(|candidate| {
+                                        type_name(candidate) == Some(member_name.as_str())
+                                    })
+                                    .cloned()
+                                {
+                                    coverage.err_members.insert(member_name);
+                                    self.check_error_member_constructor(
+                                        &member_type,
+                                        inner,
+                                        arguments[0].span,
+                                        coverage,
+                                    );
+                                } else {
+                                    self.error(
+                                        INVALID_PATTERN,
+                                        format!(
+                                            "Error member '{member_name}' is not declared by the matched expression."
+                                        ),
+                                        arguments[0].span,
+                                        error_member_hint(&members),
+                                    );
+                                }
+                            }
+                            ast::PatternKind::Variant {
+                                path,
+                                variant,
+                                arguments: inner,
+                            } => {
+                                let member_name = path.segments.last().cloned().unwrap_or_default();
+                                if let Some(member_type) = members
+                                    .iter()
+                                    .find(|candidate| {
+                                        type_name(candidate) == Some(member_name.as_str())
+                                    })
+                                    .cloned()
+                                {
+                                    coverage.err_members.insert(member_name);
+                                    self.check_error_member_variant(
+                                        &member_type,
+                                        variant,
+                                        inner.as_deref().unwrap_or(&[]),
+                                        arguments[0].span,
+                                        coverage,
+                                    );
+                                } else {
+                                    self.error(
+                                        INVALID_PATTERN,
+                                        format!(
+                                            "Error member '{member_name}' is not declared by the matched expression."
+                                        ),
+                                        arguments[0].span,
+                                        error_member_hint(&members),
+                                    );
+                                }
+                            }
+                            _ => {
+                                self.check_pattern(&arguments[0], &union, &[], coverage);
+                            }
+                        }
                     }
                     _ => {
+                        if let Some(owner) = self.variant_owners.get(&name).cloned()
+                            && let Some(enum_def) = self.resolve_enum(&owner)
+                            && let Some(variant) = enum_def
+                                .variants
+                                .iter()
+                                .find(|variant| variant.name == name)
+                        {
+                            coverage.variants.insert(name.clone());
+                            let substitutions = match ty {
+                                Type::Named(_, arguments) => {
+                                    substitutions(&enum_def.type_parameters, arguments)
+                                }
+                                _ => BTreeMap::new(),
+                            };
+                            let fields = variant
+                                .fields
+                                .clone()
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|field| field.ty.substitute(&substitutions))
+                                .collect::<Vec<_>>();
+                            self.check_pattern_arguments(
+                                arguments,
+                                &fields,
+                                pattern.span,
+                                coverage,
+                            );
+                            return;
+                        }
                         self.error(
                             INVALID_PATTERN,
                             format!("Unknown constructor pattern '{name}'."),
@@ -4063,6 +4334,111 @@ impl<'a> Checker<'a> {
             let mut nested = Coverage::default();
             self.check_pattern(pattern, ty, &[], &mut nested);
         }
+    }
+
+    fn check_error_member_constructor(
+        &mut self,
+        member_type: &Type,
+        patterns: &[ast::Pattern],
+        span: Span,
+        coverage: &mut Coverage,
+    ) {
+        let Some(name) = type_name(member_type).map(str::to_owned) else {
+            self.error(
+                INVALID_PATTERN,
+                format!("Error member '{member_type}' is not nominal."),
+                span,
+                "Use a declared struct or enum error type.",
+            );
+            return;
+        };
+
+        if let Some(struct_def) = self.resolve_struct(&name) {
+            let fields = struct_def
+                .fields
+                .iter()
+                .map(|field| field.ty.clone())
+                .collect::<Vec<_>>();
+            self.check_pattern_arguments(patterns, &fields, span, coverage);
+            return;
+        }
+
+        if let Some(enum_def) = self.resolve_enum(&name) {
+            if enum_def.variants.len() == 1 {
+                let fields = enum_def.variants[0]
+                    .fields
+                    .clone()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|field| field.ty.clone())
+                    .collect::<Vec<_>>();
+                self.check_pattern_arguments(patterns, &fields, span, coverage);
+            } else {
+                self.error(
+                    INVALID_PATTERN,
+                    format!("Error member '{name}' is an enum; select a variant."),
+                    span,
+                    "Write Err(Enum.Variant(...)).",
+                );
+            }
+            return;
+        }
+
+        self.error(
+            INVALID_PATTERN,
+            format!("Unknown error member type '{name}'."),
+            span,
+            "Declare the error type before matching it.",
+        );
+    }
+
+    fn check_error_member_variant(
+        &mut self,
+        member_type: &Type,
+        variant: &str,
+        patterns: &[ast::Pattern],
+        span: Span,
+        coverage: &mut Coverage,
+    ) {
+        let Some(name) = type_name(member_type).map(str::to_owned) else {
+            self.error(
+                INVALID_PATTERN,
+                format!("Error member '{member_type}' is not nominal."),
+                span,
+                "Use a declared enum error type.",
+            );
+            return;
+        };
+        let Some(enum_def) = self.resolve_enum(&name) else {
+            self.error(
+                INVALID_PATTERN,
+                format!("Error member '{name}' is not an enum."),
+                span,
+                "Use a variant pattern only for enum error members.",
+            );
+            return;
+        };
+        let Some(definition) = enum_def
+            .variants
+            .iter()
+            .find(|candidate| candidate.name == variant)
+        else {
+            self.error(
+                INVALID_PATTERN,
+                format!("Enum '{name}' has no variant '{variant}'."),
+                span,
+                "Use a declared variant name.",
+            );
+            return;
+        };
+        let fields = definition
+            .fields
+            .clone()
+            .unwrap_or_default()
+            .iter()
+            .map(|field| field.ty.clone())
+            .collect::<Vec<_>>();
+        self.check_pattern_arguments(patterns, &fields, span, coverage);
     }
 
     fn check_fail(
@@ -4331,13 +4707,35 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn enum_declaration_span(&self, ty: &Type) -> Option<Span> {
+        let name = type_name(ty)?;
+        match self.type_defs.get(name) {
+            Some(TypeDef::Enum(definition)) => definition.span,
+            _ => None,
+        }
+    }
+
     fn type_mismatch(&mut self, expected: &Type, actual: &Type, span: Span) {
-        self.error(
+        self.type_mismatch_with_related(expected, actual, span, None);
+    }
+
+    fn type_mismatch_with_related(
+        &mut self,
+        expected: &Type,
+        actual: &Type,
+        span: Span,
+        related: Option<(Span, &'static str)>,
+    ) {
+        let mut diagnostic = Diagnostic::error(
             TYPE_MISMATCH,
             format!("Type mismatch: expected '{expected}', found '{actual}'."),
-            span,
-            "Convert the value explicitly; Neo Astra has no implicit coercion.",
-        );
+        )
+        .with_span(span)
+        .with_hint("Convert the value explicitly; Neo Astra has no implicit coercion.");
+        if let Some((declaration, message)) = related {
+            diagnostic = diagnostic.with_related(String::new(), declaration, message);
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     fn report_effects(&mut self, errors: &[ErrorEffect]) {
@@ -4345,12 +4743,22 @@ impl<'a> Checker<'a> {
             if error.ty.is_opaque() {
                 continue;
             }
-            self.error(
+            let mut diagnostic = Diagnostic::error(
                 UNHANDLED_ERROR,
                 format!("Unhandled error effect: {}.", error.ty),
-                error.span,
-                "Propagate with '!' or handle the error with match.",
-            );
+            )
+            .with_span(error.span)
+            .with_hint(if self.options.edition == Edition::V0_2 {
+                "Propagate with '?' or handle the error with match."
+            } else {
+                "Propagate with '!' or handle the error with match."
+            });
+            if let Some(function) = &self.current_function {
+                let declaration = function.error_set_span.unwrap_or(function.span);
+                diagnostic =
+                    diagnostic.with_related(String::new(), declaration, "Declared error set.");
+            }
+            self.diagnostics.push(diagnostic);
         }
     }
 
@@ -4370,18 +4778,21 @@ impl<'a> Checker<'a> {
         };
 
         if !effect_is_compatible(&function.declared_errors, &error.ty) {
-            self.error(
+            let declaration = function.error_set_span.unwrap_or(function.span);
+            let diagnostic = Diagnostic::error(
                 UNDECLARED_ERROR,
                 format!(
                     "Error type '{}' is not declared by function '{}'.",
                     error.ty, function.name
                 ),
-                error.span,
-                format!(
-                    "Add '! {}' to the error set of '{}'.",
-                    error.ty, function.name
-                ),
-            );
+            )
+            .with_span(error.span)
+            .with_hint(format!(
+                "Add '! {}' to the error set of '{}'.",
+                error.ty, function.name
+            ))
+            .with_related(String::new(), declaration, "Declared error set.");
+            self.diagnostics.push(diagnostic);
         }
     }
 }
@@ -4509,6 +4920,17 @@ fn expected_index_type(ty: &Type) -> Option<Type> {
     match ty {
         Type::Array(_) | Type::Slice(_) | Type::FixedArray(_, _) | Type::Bytes => Some(Type::Usize),
         Type::Map(key, _) => Some((**key).clone()),
+        _ => None,
+    }
+}
+
+fn callee_identifier(callee: &ast::Expr) -> Option<String> {
+    match &callee.kind {
+        ast::ExprKind::Identifier(name) => Some(name.clone()),
+        ast::ExprKind::TypeArguments { target, .. } => match &target.kind {
+            ast::ExprKind::Identifier(name) => Some(name.clone()),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -4887,6 +5309,40 @@ fn infer_substitutions(
             infer_substitutions(&parameter.return_type, &argument.return_type, substitutions);
         }
         _ => {}
+    }
+}
+
+fn type_name(ty: &Type) -> Option<&str> {
+    match ty {
+        Type::Named(name, _) => Some(name),
+        _ => None,
+    }
+}
+
+fn error_members(ty: &Type, effects: &[Type]) -> Vec<Type> {
+    if !effects.is_empty() {
+        return effects.to_vec();
+    }
+    if let Type::Result(_, error) = ty
+        && !error.is_opaque()
+    {
+        return vec![(**error).clone()];
+    }
+    Vec::new()
+}
+
+fn error_member_hint(members: &[Type]) -> String {
+    if members.is_empty() {
+        "The matched expression declares no error members.".to_owned()
+    } else {
+        format!(
+            "Declared error members: {}.",
+            members
+                .iter()
+                .map(|member| member.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     }
 }
 

@@ -26,12 +26,22 @@ impl Severity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelatedSpan {
+    pub file: String,
+    pub span: Span,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub code: String,
     pub severity: Severity,
     pub message: String,
     pub span: Option<Span>,
     pub hint: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related: Vec<RelatedSpan>,
 }
 
 impl Diagnostic {
@@ -43,6 +53,7 @@ impl Diagnostic {
             message: message.into(),
             span: None,
             hint: None,
+            related: Vec::new(),
         }
     }
 
@@ -55,6 +66,21 @@ impl Diagnostic {
     #[must_use]
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_related(
+        mut self,
+        file: impl Into<String>,
+        span: Span,
+        message: impl Into<String>,
+    ) -> Self {
+        self.related.push(RelatedSpan {
+            file: file.into(),
+            span,
+            message: message.into(),
+        });
         self
     }
 }

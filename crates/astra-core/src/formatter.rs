@@ -1,21 +1,62 @@
 use crate::ast::*;
-use crate::lexer::{Comment, lex};
-use crate::parser::{ParseResult, parse_with_comments};
+use crate::edition::Edition;
+use crate::lexer::{Comment, LexOptions, lex_with_options};
+use crate::parser::{ParseOptions, ParseResult, parse_with_comments_with_options};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FormatOptions {
+    pub edition: Edition,
+}
 
 pub fn format_source(source: &str) -> ParseResult<String> {
-    let (module, comments) = parse_with_comments(source)?;
-    Ok(format_module_with_comments(&module, source, &comments))
+    format_source_with_options(source, FormatOptions::default())
+}
+
+pub fn format_source_with_options(source: &str, options: FormatOptions) -> ParseResult<String> {
+    let (module, comments) = parse_with_comments_with_options(
+        source,
+        ParseOptions {
+            edition: options.edition,
+        },
+    )?;
+    Ok(format_module_with_comments_edition(
+        &module,
+        source,
+        &comments,
+        options.edition,
+    ))
 }
 
 #[must_use]
 pub fn format_module(module: &Module, source: &str) -> String {
-    let comments = lex(source).comments;
-    format_module_with_comments(module, source, &comments)
+    format_module_with_options(module, source, FormatOptions::default())
+}
+
+#[must_use]
+pub fn format_module_with_options(module: &Module, source: &str, options: FormatOptions) -> String {
+    let comments = lex_with_options(
+        source,
+        LexOptions {
+            edition: options.edition,
+        },
+    )
+    .comments;
+    format_module_with_comments_edition(module, source, &comments, options.edition)
 }
 
 #[must_use]
 pub fn format_module_with_comments(module: &Module, source: &str, comments: &[Comment]) -> String {
-    Formatter::new(source, comments).format_module(module)
+    format_module_with_comments_edition(module, source, comments, Edition::default())
+}
+
+#[must_use]
+pub fn format_module_with_comments_edition(
+    module: &Module,
+    source: &str,
+    comments: &[Comment],
+    edition: Edition,
+) -> String {
+    Formatter::new(source, comments, edition).format_module(module)
 }
 
 struct Formatter<'a> {
@@ -26,10 +67,11 @@ struct Formatter<'a> {
     comment_index: usize,
     consumed_comments: Vec<bool>,
     source_len: usize,
+    edition: Edition,
 }
 
 impl<'a> Formatter<'a> {
-    fn new(source: &'a str, comments: &'a [Comment]) -> Self {
+    fn new(source: &'a str, comments: &'a [Comment], edition: Edition) -> Self {
         let mut line_starts = vec![0];
         for (index, byte) in source.bytes().enumerate() {
             if byte == b'\n' {
@@ -45,6 +87,7 @@ impl<'a> Formatter<'a> {
             comment_index: 0,
             consumed_comments: vec![false; comments.len()],
             source_len: source.len(),
+            edition,
         }
     }
 
@@ -550,14 +593,23 @@ impl<'a> Formatter<'a> {
     }
 
     fn write_scope_annotation(&mut self, annotation: &ScopeAnnotation) {
-        self.output.push_str("{@");
-        self.output.push_str(match annotation.kind {
+        let kind = match annotation.kind {
             ScopeKind::Mode => "mode",
             ScopeKind::Memory => "memory",
-        });
-        self.output.push(':');
-        self.output.push_str(&annotation.value);
-        self.output.push(';');
+        };
+        if self.edition == Edition::V0_2 {
+            self.output.push('@');
+            self.output.push_str(kind);
+            self.output.push('(');
+            self.output.push_str(&annotation.value);
+            self.output.push_str(") {");
+        } else {
+            self.output.push_str("{@");
+            self.output.push_str(kind);
+            self.output.push(':');
+            self.output.push_str(&annotation.value);
+            self.output.push(';');
+        }
     }
 
     fn write_import(&mut self, import: &ImportDecl) {
@@ -764,11 +816,15 @@ impl<'a> Formatter<'a> {
             }
             ExprKind::TypeArguments { target, arguments } => {
                 self.write_expr(target, precedence);
-                self.write_type_arguments(arguments);
+                self.write_expression_type_arguments(arguments);
             }
             ExprKind::Propagate(target) => {
                 self.write_expr(target, precedence);
-                self.output.push('!');
+                if self.edition == Edition::V0_2 {
+                    self.output.push('?');
+                } else {
+                    self.output.push('!');
+                }
             }
             ExprKind::Array(elements) => {
                 self.output.push('[');
@@ -803,7 +859,8 @@ impl<'a> Formatter<'a> {
                 self.output.push(')');
             }
             ExprKind::StructInit { path, fields } => {
-                self.write_type_path(path);
+                self.output.push_str(&path.segments.join("."));
+                self.write_expression_type_arguments(&path.arguments);
                 if fields.is_empty() {
                     self.output.push_str(" {}");
                 } else {
@@ -878,11 +935,19 @@ impl<'a> Formatter<'a> {
                 }
             }
             ExprKind::Spawn { body } => {
-                self.output.push_str("spawn || ");
+                if self.edition == Edition::V0_2 {
+                    self.output.push_str("spawn ");
+                } else {
+                    self.output.push_str("spawn || ");
+                }
                 self.write_block(body, self.current_indent);
             }
             ExprKind::Fail { error, arguments } => {
-                self.output.push('!');
+                if self.edition == Edition::V0_2 {
+                    self.output.push_str("fail ");
+                } else {
+                    self.output.push('!');
+                }
                 self.write_type_path(error);
                 match arguments {
                     FailArguments::Tuple(arguments) => {
@@ -1088,6 +1153,16 @@ impl<'a> Formatter<'a> {
         self.output.push('<');
         self.output.push_str(&parameters.join(", "));
         self.output.push('>');
+    }
+
+    fn write_expression_type_arguments(&mut self, arguments: &[Type]) {
+        if arguments.is_empty() {
+            return;
+        }
+        if self.edition == Edition::V0_2 {
+            self.output.push_str("::");
+        }
+        self.write_type_arguments(arguments);
     }
 
     fn write_type_arguments(&mut self, arguments: &[Type]) {
