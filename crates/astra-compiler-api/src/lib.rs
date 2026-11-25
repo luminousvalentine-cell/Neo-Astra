@@ -3,16 +3,30 @@ use std::collections::BTreeMap;
 use astra_capabilities::{Mode, ModeInference, infer_module_mode_named, infer_project};
 #[allow(unused_imports)]
 use astra_codegen_c::{CModule, IntegerPolicy as CIntegerPolicy};
+use astra_core::canonical::check_canonical as lint_canonical;
 use astra_core::checker::{CheckOptions, TypeAnnotation, check_resolved};
 use astra_core::diagnostic::Diagnostic;
-use astra_core::formatter::format_source;
+use astra_core::edition::Edition;
+use astra_core::formatter::{FormatOptions, format_source_with_options};
 use astra_core::ir::Program;
-use astra_core::parser::parse;
+use astra_core::migrate::migrate_source as rewrite_source;
+use astra_core::parser::{ParseOptions, parse_with_options};
 use astra_core::resolver::resolve_module;
 use astra_core::resolver::{ModuleGraph, collect_module_specifiers};
 use astra_core::type_surface::{ProjectModule, check_module_graph_with_imports};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+#[must_use]
+pub fn check_canonical(source: &str, edition: Edition) -> Vec<Diagnostic> {
+    lint_canonical(source, edition)
+}
+
+pub use astra_core::migrate::{MigrateOptions, Migration};
+
+pub fn migrate_source(source: &str, options: MigrateOptions) -> Result<Migration, Vec<Diagnostic>> {
+    rewrite_source(source, options)
+}
 
 pub const API_VERSION: &str = "1.0";
 
@@ -61,10 +75,37 @@ pub struct CompileRequest {
     pub target: String,
 
     #[serde(default)]
+    pub edition: Edition,
+
+    #[serde(default)]
     pub mode: Option<Mode>,
 
     #[serde(default)]
     pub integer_policy: IntegerPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrateRequest {
+    pub api_version: String,
+    pub source: SourceUnit,
+
+    #[serde(default)]
+    pub edition: Edition,
+
+    #[serde(default)]
+    pub change_edition: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrateResponse {
+    pub api_version: String,
+
+    pub ok: bool,
+    pub changed: bool,
+    pub diagnostics: Vec<Diagnostic>,
+    pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,6 +280,9 @@ pub struct ProjectCheckRequest {
     pub target: String,
 
     #[serde(default)]
+    pub edition: Edition,
+
+    #[serde(default)]
     pub mode: Option<Mode>,
 
     #[serde(default)]
@@ -295,7 +339,12 @@ pub fn check_project(request: &ProjectCheckRequest) -> ProjectCheckResponse {
 
     for unit in &request.sources {
         path_map.insert(unit.key.clone(), unit.path.clone());
-        match parse(&unit.text) {
+        match parse_with_options(
+            &unit.text,
+            ParseOptions {
+                edition: request.edition,
+            },
+        ) {
             Ok(module) => {
                 ast_map.insert(unit.key.clone(), module.clone());
                 project_modules.push(ProjectModule {
@@ -432,7 +481,7 @@ pub fn check_project(request: &ProjectCheckRequest) -> ProjectCheckResponse {
     let graph = check_module_graph_with_imports(
         &ordered_modules,
         &module_graph,
-        CheckOptions::new(selected_mode),
+        CheckOptions::new(selected_mode).with_edition(request.edition),
     );
 
     let ok = graph.is_ok();
@@ -515,6 +564,9 @@ pub struct ProjectCompileRequest {
     pub target: String,
 
     #[serde(default)]
+    pub edition: Edition,
+
+    #[serde(default)]
     pub mode: Option<Mode>,
 
     #[serde(default)]
@@ -593,7 +645,12 @@ pub fn compile_project(request: &ProjectCompileRequest) -> ProjectCompileRespons
 
     for unit in &request.sources {
         path_map.insert(unit.key.clone(), unit.path.clone());
-        match astra_core::parser::parse(&unit.text) {
+        match parse_with_options(
+            &unit.text,
+            ParseOptions {
+                edition: request.edition,
+            },
+        ) {
             Ok(module) => {
                 project_modules.push(astra_core::type_surface::ProjectModule {
                     key: unit.key.clone(),
@@ -666,7 +723,7 @@ pub fn compile_project(request: &ProjectCompileRequest) -> ProjectCompileRespons
     let graph = astra_core::type_surface::check_module_graph_with_imports(
         &ordered_modules,
         &module_graph,
-        astra_core::checker::CheckOptions::new(selected_mode),
+        astra_core::checker::CheckOptions::new(selected_mode).with_edition(request.edition),
     );
 
     if !graph.is_ok() {
@@ -798,7 +855,12 @@ impl FrontendCompiler {
     }
 
     fn run(&self, request: &CompileRequest, typed: bool) -> CompileResponse {
-        match parse(&request.source.text) {
+        match parse_with_options(
+            &request.source.text,
+            ParseOptions {
+                edition: request.edition,
+            },
+        ) {
             Ok(module) => {
                 let inference = infer_module_mode_named(&module, &request.source.path);
                 let mode_source = if request.mode.is_some() {
@@ -821,7 +883,11 @@ impl FrontendCompiler {
 
                 match resolve_module(&module) {
                     Ok(resolved) => {
-                        match check_resolved(&module, &resolved, CheckOptions::new(selected_mode)) {
+                        match check_resolved(
+                            &module,
+                            &resolved,
+                            CheckOptions::new(selected_mode).with_edition(request.edition),
+                        ) {
                             Ok(checked) => {
                                 let name = checked.module.name.clone();
                                 let metadata = json!({
@@ -997,7 +1063,7 @@ pub fn process_json(input: &str) -> String {
             json!({
                 "apiVersion": API_VERSION,
                 "coreVersion": env!("CARGO_PKG_VERSION"),
-                "commands": ["initialize", "check", "check_project", "compile", "compile_project", "ast", "format", "explain", "shutdown"],
+                "commands": ["initialize", "check", "check_project", "compile", "compile_project", "ast", "format", "explain", "migrate", "shutdown"],
                 "features": ["resolver", "type-checker", "project-checker", "typed-ir", "project-compile-c"],
                 "targets": ["js", "ts", "native", "wasm-web", "wasm-wasi"],
             }),
@@ -1034,7 +1100,12 @@ pub fn process_json(input: &str) -> String {
         },
         "format" => match parse_compile_request(request.params) {
             Ok(compile_request) => {
-                let response = match format_source(&compile_request.source.text) {
+                let response = match format_source_with_options(
+                    &compile_request.source.text,
+                    FormatOptions {
+                        edition: compile_request.edition,
+                    },
+                ) {
                     Ok(source) => FormatResponse::success(source),
                     Err(diagnostics) => FormatResponse::failure(diagnostics),
                 };
@@ -1060,6 +1131,13 @@ pub fn process_json(input: &str) -> String {
             ),
             Err(message) => JsonRpcResponse::error(request.id, -32602, message),
         },
+        "migrate" => match parse_migrate_request(request.params) {
+            Ok(migrate_request) => JsonRpcResponse::success(
+                request.id,
+                serde_json::to_value(migrate_for_request(&migrate_request)).unwrap_or(Value::Null),
+            ),
+            Err(message) => JsonRpcResponse::error(request.id, -32602, message),
+        },
         _ => JsonRpcResponse::error(request.id, -32601, "Method not found."),
     };
 
@@ -1067,19 +1145,52 @@ pub fn process_json(input: &str) -> String {
 }
 
 fn ast_for_request(request: &CompileRequest) -> AstResponse {
-    match parse(&request.source.text) {
+    match parse_with_options(
+        &request.source.text,
+        ParseOptions {
+            edition: request.edition,
+        },
+    ) {
         Ok(module) => AstResponse::success(module),
         Err(diagnostics) => AstResponse::failure(diagnostics),
     }
 }
 
 fn explain_for_request(request: &CompileRequest) -> ExplainResponse {
-    match parse(&request.source.text) {
+    match parse_with_options(
+        &request.source.text,
+        ParseOptions {
+            edition: request.edition,
+        },
+    ) {
         Ok(module) => ExplainResponse::success(infer_module_mode_named(
             &module,
             request.source.path.clone(),
         )),
         Err(diagnostics) => ExplainResponse::failure(diagnostics),
+    }
+}
+
+fn migrate_for_request(request: &MigrateRequest) -> MigrateResponse {
+    let options = MigrateOptions {
+        target_edition: Edition::V0_2,
+        change_edition: request.change_edition,
+    };
+    match migrate_source(&request.source.text, options) {
+        Ok(migration) => MigrateResponse {
+            api_version: API_VERSION.to_owned(),
+            ok: true,
+            changed: migration.changed,
+            diagnostics: migration.diagnostics,
+            source: migration.source,
+        },
+        Err(diagnostics) => MigrateResponse {
+            api_version: API_VERSION.to_owned(),
+            ok: false,
+            changed: false,
+            diagnostics,
+            source: request.source.text.clone(),
+        },
     }
 }
 
@@ -1095,6 +1206,13 @@ fn parse_compile_request(params: Option<Value>) -> Result<CompileRequest, String
         ));
     }
 
+    Ok(request)
+}
+
+fn parse_migrate_request(params: Option<Value>) -> Result<MigrateRequest, String> {
+    let params = params.ok_or_else(|| "Missing params.".to_owned())?;
+    let request: MigrateRequest =
+        serde_json::from_value(params).map_err(|error| format!("Invalid params: {error}"))?;
     Ok(request)
 }
 

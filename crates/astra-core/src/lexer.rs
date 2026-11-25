@@ -1,6 +1,7 @@
 use unicode_ident::{is_xid_continue, is_xid_start};
 
 use crate::diagnostic::Diagnostic;
+use crate::edition::Edition;
 use crate::span::Span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -15,6 +16,7 @@ pub enum Keyword {
     Else,
     Enum,
     Export,
+    Fail,
     False,
     Fn,
     For,
@@ -53,6 +55,7 @@ impl Keyword {
             Self::Else => "else",
             Self::Enum => "enum",
             Self::Export => "export",
+            Self::Fail => "fail",
             Self::False => "false",
             Self::Fn => "fn",
             Self::For => "for",
@@ -103,6 +106,7 @@ pub enum Punctuation {
     Dot,
     Comma,
     Colon,
+    DoubleColon,
     Semicolon,
     Arrow,
     FatArrow,
@@ -114,6 +118,7 @@ pub enum Punctuation {
     RBrace,
     At,
     Pipe,
+    Question,
     Underscore,
 }
 
@@ -158,9 +163,19 @@ impl LexResult {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LexOptions {
+    pub edition: Edition,
+}
+
 #[must_use]
 pub fn lex(source: &str) -> LexResult {
-    Lexer::new(source).run()
+    lex_with_options(source, LexOptions::default())
+}
+
+#[must_use]
+pub fn lex_with_options(source: &str, options: LexOptions) -> LexResult {
+    Lexer::new(source, options).run()
 }
 
 enum EscapeOutcome {
@@ -175,18 +190,22 @@ struct Lexer<'a> {
     comments: Vec<Comment>,
     diagnostics: Vec<Diagnostic>,
 
+    #[allow(dead_code)]
+    edition: Edition,
+
     script_header_depth: u32,
     script_start: usize,
 }
 
 impl<'a> Lexer<'a> {
-    fn new(source: &'a str) -> Self {
+    fn new(source: &'a str, options: LexOptions) -> Self {
         Self {
             source,
             offset: 0,
             tokens: Vec::new(),
             comments: Vec::new(),
             diagnostics: Vec::new(),
+            edition: options.edition,
             script_header_depth: 0,
             script_start: 0,
         }
@@ -548,9 +567,18 @@ impl<'a> Lexer<'a> {
             }
         }
 
+        let tuple_index = self.edition == Edition::V0_2
+            && matches!(
+                self.tokens.last(),
+                Some(token) if token.kind == TokenKind::Punct(Punctuation::Dot)
+            );
+
         let mut is_float = false;
 
-        if self.peek() == Some('.') && self.peek_n(1).is_some_and(|c| c.is_ascii_digit()) {
+        if !tuple_index
+            && self.peek() == Some('.')
+            && self.peek_n(1).is_some_and(|c| c.is_ascii_digit())
+        {
             is_float = true;
             self.bump();
             while let Some(character) = self.peek() {
@@ -562,7 +590,7 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        if matches!(self.peek(), Some('e' | 'E')) {
+        if !tuple_index && matches!(self.peek(), Some('e' | 'E')) {
             let has_digit = match self.peek_n(1) {
                 Some('+' | '-') => self.peek_n(2).is_some_and(|c| c.is_ascii_digit()),
                 Some(character) => character.is_ascii_digit(),
@@ -588,7 +616,9 @@ impl<'a> Lexer<'a> {
         if is_float {
             self.push(TokenKind::Float, start);
         } else {
-            self.byte_suffix();
+            if !tuple_index {
+                self.byte_suffix();
+            }
             self.push(TokenKind::Integer, start);
         }
     }
@@ -619,7 +649,11 @@ impl<'a> Lexer<'a> {
         let kind = if text == "_" {
             TokenKind::Punct(Punctuation::Underscore)
         } else if let Some(keyword) = keyword(text) {
-            TokenKind::Keyword(keyword)
+            if keyword == Keyword::Fail && self.edition != Edition::V0_2 {
+                TokenKind::Identifier
+            } else {
+                TokenKind::Keyword(keyword)
+            }
         } else {
             TokenKind::Identifier
         };
@@ -815,7 +849,25 @@ impl<'a> Lexer<'a> {
             }
             '.' => one(self, Punctuation::Dot),
             ',' => one(self, Punctuation::Comma),
-            ':' => one(self, Punctuation::Colon),
+            ':' => {
+                if self.peek() == Some(':') && self.edition == Edition::V0_2 {
+                    self.bump();
+                    let rest = self.source.get(self.offset..).unwrap_or_default();
+                    if self.peek() == Some('<') {
+                        one(self, Punctuation::DoubleColon);
+                    } else {
+                        let hint = if rest.trim_start().starts_with('<') {
+                            "Write `::<` with no space."
+                        } else {
+                            "A standalone `::` is not valid; use `::<...>` for type arguments."
+                        };
+                        self.diagnostic("NS2011", "Malformed turbofish.", hint, start, self.offset);
+                        one(self, Punctuation::DoubleColon);
+                    }
+                } else {
+                    one(self, Punctuation::Colon);
+                }
+            }
             ';' => one(self, Punctuation::Semicolon),
             '(' => one(self, Punctuation::LParen),
             ')' => one(self, Punctuation::RParen),
@@ -844,6 +896,7 @@ impl<'a> Lexer<'a> {
                 }
                 one(self, Punctuation::At);
             }
+            '?' if self.edition == Edition::V0_2 => one(self, Punctuation::Question),
             _ => {
                 self.diagnostic(
                     "NS1005",
@@ -877,6 +930,7 @@ fn keyword(text: &str) -> Option<Keyword> {
         "else" => Keyword::Else,
         "enum" => Keyword::Enum,
         "export" => Keyword::Export,
+        "fail" => Keyword::Fail,
         "false" => Keyword::False,
         "fn" | "function" => Keyword::Fn,
         "for" => Keyword::For,

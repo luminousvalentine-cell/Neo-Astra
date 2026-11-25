@@ -767,6 +767,7 @@ fn discover(
     Ok(())
 }
 
+#[allow(clippy::result_large_err)]
 fn resolve_specifier(importer: &ModuleId, raw: &str) -> Result<Option<ModuleId>, Diagnostic> {
     if raw.starts_with("std:") {
         return Ok(None);
