@@ -80,7 +80,7 @@ function writeSmokeProject(directory, source, targets, defaultTarget) {
         package: {
           name: "package-smoke",
           version: "0.0.0",
-          edition: "2026",
+          edition: "0.1",
           license: "Apache-2.0",
         },
       },
