@@ -496,6 +496,9 @@ fn find_call_in_expr(expression: &ast::Expr, offset: usize) -> Option<&ast::Expr
         ast::ExprKind::Index { target, index } => {
             find_call_in_expr(target, offset).or_else(|| find_call_in_expr(index, offset))
         }
+        ast::ExprKind::Range { start, end, .. } => {
+            find_call_in_expr(start, offset).or_else(|| find_call_in_expr(end, offset))
+        }
         ast::ExprKind::Array(values) | ast::ExprKind::Tuple(values) => values
             .iter()
             .find_map(|value| find_call_in_expr(value, offset)),
@@ -1801,6 +1804,10 @@ fn collect_expr_bindings(module: &ProjectModule, expr: &ast::Expr, bindings: &mu
         ast::ExprKind::Index { target, index } => {
             collect_expr_bindings(module, target, bindings);
             collect_expr_bindings(module, index, bindings);
+        }
+        ast::ExprKind::Range { start, end, .. } => {
+            collect_expr_bindings(module, start, bindings);
+            collect_expr_bindings(module, end, bindings);
         }
         ast::ExprKind::Array(values) | ast::ExprKind::Tuple(values) => {
             for value in values {

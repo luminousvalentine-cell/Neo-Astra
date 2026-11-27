@@ -1238,6 +1238,10 @@ impl<'a> Emitter<'a> {
                 self.count_expr_slots(target, total);
                 self.count_expr_slots(value, total);
             }
+            ExprKind::Range { start, end, .. } => {
+                self.count_expr_slots(start, total);
+                self.count_expr_slots(end, total);
+            }
             ExprKind::Call { callee, arguments } => {
                 self.count_expr_slots(callee, total);
                 for argument in arguments {
@@ -1420,6 +1424,10 @@ impl<'a> Emitter<'a> {
                 }
                 self.mutation_bases(target, out);
                 self.mutation_bases(value, out);
+            }
+            ExprKind::Range { start, end, .. } => {
+                self.mutation_bases(start, out);
+                self.mutation_bases(end, out);
             }
             ExprKind::Call { callee, arguments } => {
                 if let ExprKind::Member { target, .. } = &callee.kind
@@ -2017,6 +2025,41 @@ impl<'a> Emitter<'a> {
     }
 
     fn emit_for(&mut self, binding: &str, iterable: &Expr, body: &ast::Block) {
+        if let ExprKind::Range {
+            start,
+            end,
+            inclusive,
+        } = &iterable.kind
+        {
+            let elem_ty = match self.type_of(iterable).cloned() {
+                Some(Type::Range(inner)) => *inner,
+                _ => self.type_of(start).cloned().unwrap_or(Type::I32),
+            };
+            let elem_c = self.tcx.c_type(&elem_ty);
+            self.pre.clear();
+            let start_c = self.expr(start);
+            let end_c = self.expr(end);
+            self.flush_pre();
+            let idx = self.fresh_id("r");
+            let limit = self.fresh_id("re");
+            let _ = writeln!(self.out, "    {elem_c} {limit} = {end_c};");
+            let comparison = if *inclusive { "<=" } else { "<" };
+            let _ = writeln!(
+                self.out,
+                "    for ({elem_c} {idx} = {start_c}; {idx} {comparison} {limit}; ++{idx}) {{"
+            );
+            let binding_c = format!("v_{}", sanitize(binding));
+            let _ = writeln!(self.out, "        {elem_c} {binding_c} = {idx};");
+            let first = self.roots.as_ref().map_or(0, |frame| frame.used);
+            let slots = self.publish_local(&binding_c, &elem_ty, first);
+            self.push_capture_scope();
+            self.record_local(binding_c, elem_ty, first, slots);
+            self.emit_block_body(body, false, false);
+            self.writeln_s("        astra_gc_maybe_collect();");
+            self.writeln_s("    }");
+            self.pop_capture_scope();
+            return;
+        }
         let iter_ty = self.type_of(iterable).cloned().unwrap_or(Type::Unit);
         enum IterKind {
             Array,
@@ -2229,7 +2272,8 @@ impl<'a> Emitter<'a> {
             | Type::U32
             | Type::U64
             | Type::Usize
-            | Type::Isize => "0".into(),
+            | Type::Isize
+            | Type::Char => "0".into(),
             Type::Unit => "(NS_Unit){0}".into(),
             Type::Str => "(NS_Str){0}".into(),
             Type::Bytes => "(NS_Bytes){0}".into(),
@@ -2254,6 +2298,13 @@ impl<'a> Emitter<'a> {
             ExprKind::Assign { target, value } => self.assign_c(target, value),
             ExprKind::Call { callee, arguments } => self.call_c(callee, arguments, e),
             ExprKind::Index { target, index } => self.index_c(target, index, e),
+            ExprKind::Range { .. } => {
+                self.tcx.rejects.push(reject(
+                    "NS8021",
+                    "range values are only supported as a for-loop iterable in the C backend",
+                ));
+                "(NS_Unit){0}".into()
+            }
             ExprKind::Member { target, member } => self.member_c(target, member, e),
             ExprKind::TypeArguments { target, .. } => self.expr(target),
             ExprKind::Propagate(inner) => self.propagate_c(inner),
@@ -2278,17 +2329,38 @@ impl<'a> Emitter<'a> {
     fn literal_c(&mut self, lit: &Literal) -> String {
         match lit {
             Literal::Integer(raw) => {
+                const SUFFIXES: &[&str] = &[
+                    "usize", "isize", "i16", "i32", "i64", "u16", "u32", "u64", "i8", "u8",
+                ];
                 let cleaned: String = raw.chars().filter(|c| *c != '_').collect();
-
-                cleaned
-                    .strip_suffix("u8")
-                    .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
-                    .unwrap_or(&cleaned)
-                    .to_string()
+                let mut digits = cleaned.as_str();
+                for suffix in SUFFIXES {
+                    if let Some(stripped) = digits.strip_suffix(suffix)
+                        && !stripped.is_empty()
+                    {
+                        digits = stripped;
+                        break;
+                    }
+                }
+                digits.to_string()
             }
-            Literal::Float(raw) => raw.chars().filter(|c| *c != '_').collect::<String>(),
+            Literal::Float(raw) => {
+                const SUFFIXES: &[&str] = &["f32", "f64"];
+                let cleaned: String = raw.chars().filter(|c| *c != '_').collect();
+                let mut digits = cleaned.as_str();
+                for suffix in SUFFIXES {
+                    if let Some(stripped) = digits.strip_suffix(suffix)
+                        && !stripped.is_empty()
+                    {
+                        digits = stripped;
+                        break;
+                    }
+                }
+                digits.to_string()
+            }
             Literal::String(value) => self.c_string_literal(value),
             Literal::Bytes(bytes) => self.c_bytes_literal(bytes),
+            Literal::Character(value) => format!("((uint32_t)0x{:X})", u32::from(*value)),
             Literal::Bool(b) => {
                 if *b {
                     "true".into()
@@ -2452,6 +2524,21 @@ impl<'a> Emitter<'a> {
                 } else {
                     format!("({l} {sym} {r})")
                 }
+            }
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => {
+                let symbol = match op {
+                    BinaryOp::BitAnd => "&",
+                    BinaryOp::BitOr => "|",
+                    BinaryOp::BitXor => "^",
+                    BinaryOp::Shl => "<<",
+                    BinaryOp::Shr => ">>",
+                    _ => unreachable!("bitwise arm"),
+                };
+                format!("({l} {symbol} {r})")
             }
             BinaryOp::Add
             | BinaryOp::Subtract
@@ -3144,6 +3231,23 @@ impl<'a> Emitter<'a> {
                     "astra_array_push(&({r}), sizeof({elem_c}), &({elem_c}){{ {val} }}, {shape})"
                 )
             }
+            (Some(Type::Array(_) | Type::Slice(_)), "slice") => {
+                let elem_ty = self.elem_type_of(receiver);
+                let elem_c = self.tcx.c_type(&elem_ty);
+                let shape = self.tcx.block_shape_ref(&elem_ty);
+                let array = self.expr(receiver);
+                let start = args
+                    .first()
+                    .map(|a| self.expr(a))
+                    .unwrap_or_else(|| "0".into());
+                let end = args
+                    .get(1)
+                    .map(|a| self.expr(a))
+                    .unwrap_or_else(|| "0".into());
+                format!(
+                    "astra_array_slice({array}, (size_t)({start}), (size_t)({end}), sizeof({elem_c}), {shape})"
+                )
+            }
             (Some(Type::Array(_) | Type::Slice(_)), "get") => {
                 let elem_ty = self.elem_type_of(receiver);
                 let elem_c = self.tcx.c_type(&elem_ty);
@@ -3488,6 +3592,7 @@ impl<'a> Emitter<'a> {
             Type::F32 => "f32",
             Type::F64 => "f64",
             Type::Bool => "bool",
+            Type::Char => "char",
             Type::Str => "str",
             Type::Bytes => "bytes",
             Type::Unit => "unit",
@@ -4227,7 +4332,9 @@ impl<'a> Emitter<'a> {
                 self.match_struct(scrut, name, arms, target, result_ty)
             }
             Type::Tuple(_) => self.match_tuple(scrut, scrut_ty, arms, target, result_ty),
-            ty if ty.is_numeric() || matches!(ty, Type::Bool | Type::Str | Type::Bytes) => {
+            ty if ty.is_numeric()
+                || matches!(ty, Type::Bool | Type::Char | Type::Str | Type::Bytes) =>
+            {
                 self.match_literal(scrut, scrut_ty, arms, target, result_ty)
             }
             _ => {

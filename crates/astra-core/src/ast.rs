@@ -368,6 +368,12 @@ pub enum ExprKind {
         target: Box<Expr>,
         index: Box<Expr>,
     },
+
+    Range {
+        start: Box<Expr>,
+        end: Box<Expr>,
+        inclusive: bool,
+    },
     Member {
         target: Box<Expr>,
         member: String,
@@ -477,6 +483,7 @@ pub enum Literal {
     Float(String),
     String(String),
     Bytes(Vec<u8>),
+    Character(char),
     Bool(bool),
     Unit,
 }
@@ -506,4 +513,9 @@ pub enum BinaryOp {
     GreaterEqual,
     And,
     Or,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }

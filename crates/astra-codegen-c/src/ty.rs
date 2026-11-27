@@ -407,6 +407,7 @@ impl TyCtxt {
             Type::Bool => "bool".into(),
             Type::Str => "Str".into(),
             Type::Bytes => "Bytes".into(),
+            Type::Char => "Char".into(),
             Type::Unit => "Unit".into(),
             Type::Never => "Never".into(),
             Type::Error => "Error".into(),
@@ -415,6 +416,7 @@ impl TyCtxt {
             Type::Result(ok, err) => format!("Result_{}_{}", self.ident(ok), self.ident(err)),
             Type::Array(inner) => format!("Array_{}", self.ident(inner)),
             Type::Slice(inner) => format!("Slice_{}", self.ident(inner)),
+            Type::Range(inner) => format!("Range_{}", self.ident(inner)),
             Type::FixedArray(inner, n) => format!("FixedArray_{}_{}", self.ident(inner), n),
             Type::Map(key, value) => format!("Map_{}_{}", self.ident(key), self.ident(value)),
             Type::Tuple(elements) => {
@@ -484,6 +486,9 @@ impl TyCtxt {
             Type::Bool => "bool".into(),
             Type::Str => "NS_Str".into(),
             Type::Bytes => "NS_Bytes".into(),
+            Type::Char => "uint32_t".into(),
+
+            Type::Range(_) => "NS_Unit".into(),
             Type::Unit => "NS_Unit".into(),
             Type::Never => {
                 self.rejects.push(Reject {

@@ -5,6 +5,7 @@ use std::rc::Rc;
 use astra_core::ast;
 use astra_core::checker::CheckResult;
 use astra_core::hir;
+use astra_core::literal::{float_suffix, integer_suffix};
 use astra_core::mode::Mode;
 use astra_core::span::Span;
 use astra_core::types::Type;
@@ -479,8 +480,46 @@ impl Interpreter {
                 iterable,
                 body,
             } => {
-                let iterable = eval_value!(self.eval_expr(iterable, scope));
-                let values = self.iterate(iterable)?;
+                let values = if let ast::ExprKind::Range {
+                    start,
+                    end,
+                    inclusive,
+                } = &iterable.kind
+                {
+                    let start = eval_value!(self.eval_expr(start, scope));
+                    let end = eval_value!(self.eval_expr(end, scope));
+                    match (start, end) {
+                        (Value::Integer(start), Value::Integer(end)) => {
+                            let ty = start.ty.clone();
+                            let mut values = Vec::new();
+                            let mut current = start.value;
+                            let stop = if *inclusive {
+                                end.value.checked_add(1)
+                            } else {
+                                Some(end.value)
+                            };
+                            let Some(stop) = stop else {
+                                return Err(self.internal("range end overflows i128"));
+                            };
+                            while current < stop {
+                                values.push(Value::Integer(Integer::new(current, ty.clone())));
+                                let Some(next) = current.checked_add(1) else {
+                                    break;
+                                };
+                                current = next;
+                            }
+                            values
+                        }
+                        _ => {
+                            return Err(
+                                self.internal("range bounds were not integers after type checking")
+                            );
+                        }
+                    }
+                } else {
+                    let iterable = eval_value!(self.eval_expr(iterable, scope));
+                    self.iterate(iterable)?
+                };
                 for value in values {
                     let iteration = Scope::child(scope);
                     iteration.borrow_mut().values.insert(binding.clone(), value);
@@ -617,6 +656,9 @@ impl Interpreter {
                 let index = eval_value!(self.eval_expr(index, scope));
                 Ok(Flow::Value(self.index(target, index, expression.span)?))
             }
+            ast::ExprKind::Range { .. } => {
+                Err(self.internal("range values are only supported as a for-loop iterable"))
+            }
             ast::ExprKind::Member { target, member } => {
                 self.member(target, member, expression.span, scope)
             }
@@ -750,7 +792,12 @@ impl Interpreter {
             | ast::BinaryOp::AddWrap
             | ast::BinaryOp::SubtractWrap
             | ast::BinaryOp::MultiplyWrap
-            | ast::BinaryOp::DivideWrap => self.numeric_binary(operator, left, right, span)?,
+            | ast::BinaryOp::DivideWrap
+            | ast::BinaryOp::BitAnd
+            | ast::BinaryOp::BitOr
+            | ast::BinaryOp::BitXor
+            | ast::BinaryOp::Shl
+            | ast::BinaryOp::Shr => self.numeric_binary(operator, left, right, span)?,
             ast::BinaryOp::And | ast::BinaryOp::Or => unreachable!("handled above"),
         };
         Ok(Flow::Value(value))
@@ -1963,11 +2010,10 @@ impl Interpreter {
     fn pattern_literal(&self, literal: &ast::Literal, expected: &Value) -> Value {
         match literal {
             ast::Literal::Integer(text) => {
-                let (raw, suffix_u8) = strip_u8_suffix(text);
+                let (raw, suffix) = integer_suffix(text);
                 let ty = match expected {
                     Value::Integer(integer) => integer.ty.clone(),
-                    _ if suffix_u8 => Type::U8,
-                    _ => Type::I32,
+                    _ => suffix.unwrap_or(Type::I32),
                 };
                 let value = parse_integer(raw)
                     .and_then(|value| i128::try_from(value).ok())
@@ -1975,15 +2021,17 @@ impl Interpreter {
                 Value::Integer(Integer::new(value, ty))
             }
             ast::Literal::Float(text) => {
+                let (raw, suffix) = float_suffix(text);
                 let ty = match expected {
                     Value::Float(float) => float.ty.clone(),
-                    _ => Type::F64,
+                    _ => suffix.unwrap_or(Type::F64),
                 };
-                let value = text.replace('_', "").parse::<f64>().unwrap_or(0.0);
+                let value = raw.replace('_', "").parse::<f64>().unwrap_or(0.0);
                 Value::Float(Float::new(value, ty))
             }
             ast::Literal::String(value) => Value::string(value.clone()),
             ast::Literal::Bytes(value) => Value::Bytes(Rc::new(RefCell::new(value.clone()))),
+            ast::Literal::Character(value) => Value::string(value.to_string()),
             ast::Literal::Bool(value) => Value::Bool(*value),
             ast::Literal::Unit => Value::Unit,
         }
@@ -2169,32 +2217,36 @@ impl Interpreter {
     fn literal(&self, literal: &ast::Literal, span: Span) -> Value {
         match literal {
             ast::Literal::Integer(text) => {
-                let (raw, suffix_u8) = strip_u8_suffix(text);
+                let (raw, suffix) = integer_suffix(text);
                 let ty = self
                     .current()
                     .annotations
                     .get(&span)
                     .filter(|ty| ty.is_integer())
                     .cloned()
-                    .unwrap_or(if suffix_u8 { Type::U8 } else { Type::I32 });
+                    .or(suffix)
+                    .unwrap_or(Type::I32);
                 let value = parse_integer(raw)
                     .and_then(|value| i128::try_from(value).ok())
                     .unwrap_or(0);
                 Value::Integer(Integer::new(value, ty))
             }
             ast::Literal::Float(text) => {
+                let (raw, suffix) = float_suffix(text);
                 let ty = self
                     .current()
                     .annotations
                     .get(&span)
                     .filter(|ty| ty.is_float())
                     .cloned()
+                    .or(suffix)
                     .unwrap_or(Type::F64);
-                let value = text.replace('_', "").parse::<f64>().unwrap_or(0.0);
+                let value = raw.replace('_', "").parse::<f64>().unwrap_or(0.0);
                 Value::Float(Float::new(value, ty))
             }
             ast::Literal::String(value) => Value::string(value.clone()),
             ast::Literal::Bytes(value) => Value::Bytes(Rc::new(RefCell::new(value.clone()))),
+            ast::Literal::Character(value) => Value::string(value.to_string()),
             ast::Literal::Bool(value) => Value::Bool(*value),
             ast::Literal::Unit => Value::Unit,
         }
@@ -2262,6 +2314,38 @@ impl Interpreter {
     ) -> Result<Value, Fault> {
         match (left, right) {
             (Value::Integer(left), Value::Integer(right)) => {
+                if matches!(
+                    operator,
+                    ast::BinaryOp::BitAnd
+                        | ast::BinaryOp::BitOr
+                        | ast::BinaryOp::BitXor
+                        | ast::BinaryOp::Shl
+                        | ast::BinaryOp::Shr
+                ) {
+                    let value = match operator {
+                        ast::BinaryOp::BitAnd => left.value & right.value,
+                        ast::BinaryOp::BitOr => left.value | right.value,
+                        ast::BinaryOp::BitXor => left.value ^ right.value,
+                        ast::BinaryOp::Shl | ast::BinaryOp::Shr => {
+                            let shift = u32::try_from(right.value).map_err(|_| {
+                                self.panic("shift count must be non-negative", span)
+                            })?;
+                            let bits = integer_bits(&left.ty).unwrap_or(128);
+                            if shift >= bits {
+                                0
+                            } else if operator == ast::BinaryOp::Shl {
+                                left.value << shift
+                            } else {
+                                left.value >> shift
+                            }
+                        }
+                        _ => unreachable!("bitwise arm"),
+                    };
+                    return Ok(Value::Integer(Integer::new(
+                        normalize_integer(value, &left.ty),
+                        left.ty,
+                    )));
+                }
                 let mode = if matches!(
                     operator,
                     ast::BinaryOp::AddWrap
@@ -2487,14 +2571,6 @@ fn builtin_function(name: &str) -> Option<BuiltinFunction> {
         "dbg" => Some(BuiltinFunction::Dbg),
         "assert" => Some(BuiltinFunction::Assert),
         _ => None,
-    }
-}
-
-fn strip_u8_suffix(text: &str) -> (&str, bool) {
-    if let Some(raw) = text.strip_suffix("u8") {
-        (raw, true)
-    } else {
-        (text, false)
     }
 }
 

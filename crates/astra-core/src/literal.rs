@@ -1,3 +1,38 @@
+use crate::types::Type;
+
+const INTEGER_SUFFIXES: &[(&str, Type)] = &[
+    ("usize", Type::Usize),
+    ("isize", Type::Isize),
+    ("i16", Type::I16),
+    ("i32", Type::I32),
+    ("i64", Type::I64),
+    ("u16", Type::U16),
+    ("u32", Type::U32),
+    ("u64", Type::U64),
+    ("i8", Type::I8),
+    ("u8", Type::U8),
+];
+
+const FLOAT_SUFFIXES: &[(&str, Type)] = &[("f32", Type::F32), ("f64", Type::F64)];
+
+pub fn integer_suffix(text: &str) -> (&str, Option<Type>) {
+    for (suffix, ty) in INTEGER_SUFFIXES {
+        if let Some(raw) = text.strip_suffix(suffix) {
+            return (raw, Some(ty.clone()));
+        }
+    }
+    (text, None)
+}
+
+pub fn float_suffix(text: &str) -> (&str, Option<Type>) {
+    for (suffix, ty) in FLOAT_SUFFIXES {
+        if let Some(raw) = text.strip_suffix(suffix) {
+            return (raw, Some(ty.clone()));
+        }
+    }
+    (text, None)
+}
+
 fn decode_escape(inner: &str, index: &mut usize, is_byte: bool) -> Result<Vec<u8>, String> {
     let Some(character) = inner[*index..].chars().next() else {
         return Err("escape at end of literal".to_owned());
@@ -7,6 +42,7 @@ fn decode_escape(inner: &str, index: &mut usize, is_byte: bool) -> Result<Vec<u8
     match character {
         '\\' => Ok(vec![b'\\']),
         '"' => Ok(vec![b'"']),
+        '\'' => Ok(vec![b'\'']),
         'n' => Ok(vec![b'\n']),
         'r' => Ok(vec![b'\r']),
         't' => Ok(vec![b'\t']),
@@ -83,6 +119,18 @@ pub fn decode_string_literal(raw: &str) -> Result<String, String> {
     }
 
     Ok(output)
+}
+
+pub fn decode_char_literal(raw: &str) -> Result<char, String> {
+    let decoded = decode_string_literal(&format!("\"{}\"", &raw[1..raw.len() - 1]))?;
+    let mut characters = decoded.chars();
+    let value = characters
+        .next()
+        .ok_or_else(|| "empty character literal".to_owned())?;
+    if characters.next().is_some() {
+        return Err("character literal contains more than one scalar value".to_owned());
+    }
+    Ok(value)
 }
 
 pub fn decode_byte_literal(raw: &str) -> Result<Vec<u8>, String> {
