@@ -4,7 +4,7 @@ use crate::edition::Edition;
 use crate::lexer::{
     Comment, Keyword, LexOptions, LexResult, Punctuation, Token, TokenKind, lex_with_options,
 };
-use crate::literal::{decode_byte_literal, decode_string_literal};
+use crate::literal::{decode_byte_literal, decode_char_literal, decode_string_literal};
 use crate::span::Span;
 
 pub type ParseResult<T> = Result<T, Vec<Diagnostic>>;
@@ -63,6 +63,8 @@ pub fn parse_with_comments_with_options(
         tokens,
         index: 0,
         diagnostics,
+        pending_lambda: None,
+        lambda_depth: 0,
         edition: options.edition,
         depth: 0,
         depth_reported: false,
@@ -108,10 +110,26 @@ fn suppress_cascades(diagnostics: Vec<Diagnostic>, source: &str) -> Vec<Diagnost
         .collect()
 }
 
+struct PendingLambda {
+    parameters: Vec<LambdaParameter>,
+    body: Box<Expr>,
+    span: Span,
+}
+
+struct LambdaParameter {
+    name: String,
+    ty: Option<Type>,
+    span: Span,
+}
+
 struct Parser {
     tokens: Vec<Token>,
     index: usize,
     diagnostics: Vec<Diagnostic>,
+
+    pending_lambda: Option<PendingLambda>,
+
+    lambda_depth: usize,
 
     #[allow(dead_code)]
     edition: Edition,
@@ -1575,6 +1593,14 @@ impl Parser {
         }
 
         if self.eat_keyword(Keyword::While) {
+            if self.edition == Edition::V0_2 && self.at_keyword(Keyword::Let) {
+                self.bump();
+                let pattern = self.parse_pattern();
+                self.expect_punct(Punctuation::Eq, "'='");
+                let value = self.parse_expression();
+                let body = self.parse_block();
+                return Some(self.desugar_while_let(pattern, value, body, start));
+            }
             let condition = self.parse_expression();
             let body = self.parse_block();
             return Some(Stmt {
@@ -1647,11 +1673,28 @@ impl Parser {
 
     fn parse_expression(&mut self) -> Expr {
         self.depth += 1;
+        self.lambda_depth += 1;
         if self.depth > MAX_NESTING_DEPTH {
+            self.lambda_depth -= 1;
             return self.nesting_limit_expression();
         }
+        let depth = self.lambda_depth;
         let expression = self.parse_assignment();
         self.depth -= 1;
+        self.lambda_depth -= 1;
+        if depth == 1 && self.pending_lambda.is_some() {
+            let lambda = self.pending_lambda.take().expect("pending lambda");
+            self.error(
+                EXPECTED,
+                "A lambda must be invoked immediately.",
+                lambda.span,
+                "Write (fn(x) => body)(argument).",
+            );
+            return Expr {
+                kind: ExprKind::Literal(Literal::Unit),
+                span: lambda.span,
+            };
+        }
         expression
     }
 
@@ -1696,7 +1739,7 @@ impl Parser {
     }
 
     fn parse_assignment(&mut self) -> Expr {
-        let left = self.parse_logical_or();
+        let left = self.parse_range();
 
         if self.eat_punct(Punctuation::Eq) {
             self.skip_continuation_newlines();
@@ -1712,6 +1755,31 @@ impl Parser {
         }
 
         left
+    }
+
+    fn parse_range(&mut self) -> Expr {
+        let start = self.parse_logical_or();
+        if self.edition != Edition::V0_2 {
+            return start;
+        }
+        let inclusive = if self.eat_punct(Punctuation::DotDotEq) {
+            true
+        } else if self.eat_punct(Punctuation::DotDot) {
+            false
+        } else {
+            return start;
+        };
+        self.skip_continuation_newlines();
+        let end = self.parse_logical_or();
+        let span = Span::new(start.span.start, end.span.end);
+        Expr {
+            kind: ExprKind::Range {
+                start: Box::new(start),
+                end: Box::new(end),
+                inclusive,
+            },
+            span,
+        }
     }
 
     fn parse_logical_or(&mut self) -> Expr {
@@ -1744,6 +1812,111 @@ impl Parser {
             expression = Expr {
                 kind: ExprKind::Binary {
                     operator: BinaryOp::And,
+                    left: Box::new(expression),
+                    right: Box::new(right),
+                },
+                span,
+            };
+        }
+
+        expression
+    }
+
+    fn parse_bit_or(&mut self) -> Expr {
+        let mut expression = self.parse_bit_xor();
+
+        while self.edition == Edition::V0_2 && self.eat_punct(Punctuation::Pipe) {
+            self.skip_continuation_newlines();
+            let right = self.parse_bit_xor();
+            let span = Span::new(expression.span.start, right.span.end);
+            expression = Expr {
+                kind: ExprKind::Binary {
+                    operator: BinaryOp::BitOr,
+                    left: Box::new(expression),
+                    right: Box::new(right),
+                },
+                span,
+            };
+        }
+
+        expression
+    }
+
+    fn parse_bit_xor(&mut self) -> Expr {
+        let mut expression = self.parse_bit_and();
+
+        while self.edition == Edition::V0_2 && self.eat_punct(Punctuation::Caret) {
+            self.skip_continuation_newlines();
+            let right = self.parse_bit_and();
+            let span = Span::new(expression.span.start, right.span.end);
+            expression = Expr {
+                kind: ExprKind::Binary {
+                    operator: BinaryOp::BitXor,
+                    left: Box::new(expression),
+                    right: Box::new(right),
+                },
+                span,
+            };
+        }
+
+        expression
+    }
+
+    fn parse_bit_and(&mut self) -> Expr {
+        let mut expression = self.parse_shift();
+
+        while self.edition == Edition::V0_2 && self.eat_punct(Punctuation::Amp) {
+            self.skip_continuation_newlines();
+            let right = self.parse_shift();
+            let span = Span::new(expression.span.start, right.span.end);
+            expression = Expr {
+                kind: ExprKind::Binary {
+                    operator: BinaryOp::BitAnd,
+                    left: Box::new(expression),
+                    right: Box::new(right),
+                },
+                span,
+            };
+        }
+
+        expression
+    }
+
+    fn parse_shift(&mut self) -> Expr {
+        let mut expression = self.parse_additive();
+
+        loop {
+            let operator = if self.edition != Edition::V0_2 {
+                None
+            } else {
+                let current = self.peek();
+                let next = self.peek_at(1);
+                let adjacent = next.is_some_and(|token| token.span.start == current.span.end);
+                if adjacent
+                    && current.kind == TokenKind::Punct(Punctuation::Lt)
+                    && next.is_some_and(|token| token.kind == TokenKind::Punct(Punctuation::Lt))
+                {
+                    Some(BinaryOp::Shl)
+                } else if adjacent
+                    && current.kind == TokenKind::Punct(Punctuation::Gt)
+                    && next.is_some_and(|token| token.kind == TokenKind::Punct(Punctuation::Gt))
+                {
+                    Some(BinaryOp::Shr)
+                } else {
+                    None
+                }
+            };
+            let Some(operator) = operator else {
+                break;
+            };
+            self.bump();
+            self.bump();
+            self.skip_continuation_newlines();
+            let right = self.parse_additive();
+            let span = Span::new(expression.span.start, right.span.end);
+            expression = Expr {
+                kind: ExprKind::Binary {
+                    operator,
                     left: Box::new(expression),
                     right: Box::new(right),
                 },
@@ -1787,7 +1960,7 @@ impl Parser {
     }
 
     fn parse_comparison(&mut self) -> Expr {
-        let mut expression = self.parse_additive();
+        let mut expression = self.parse_bit_or();
 
         loop {
             let operator = if self.eat_punct(Punctuation::Lt) {
@@ -1807,7 +1980,7 @@ impl Parser {
             };
             self.skip_continuation_newlines();
 
-            let right = self.parse_additive();
+            let right = self.parse_bit_or();
             let span = Span::new(expression.span.start, right.span.end);
             expression = Expr {
                 kind: ExprKind::Binary {
@@ -1924,6 +2097,16 @@ impl Parser {
     fn parse_postfix(&mut self) -> Expr {
         let mut expression = self.parse_primary();
 
+        if let Some(lambda) = self.pending_lambda.take() {
+            if self.eat_punct(Punctuation::LParen) {
+                let arguments = self.parse_expression_list_after_open();
+                let span = Span::new(lambda.span.start, self.last_end());
+                expression = self.lower_lambda_call(lambda, arguments, span);
+            } else {
+                self.pending_lambda = Some(lambda);
+            }
+        }
+
         loop {
             if self.edition == Edition::V0_2
                 && self.at(TokenKind::Newline)
@@ -1972,13 +2155,56 @@ impl Parser {
                 let index = self.parse_expression();
                 self.expect_punct(Punctuation::RBracket, "']'");
                 let span = Span::new(expression.span.start, self.last_end());
-                expression = Expr {
-                    kind: ExprKind::Index {
-                        target: Box::new(expression),
-                        index: Box::new(index),
-                    },
-                    span,
-                };
+                if self.edition == Edition::V0_2 && matches!(index.kind, ExprKind::Range { .. }) {
+                    let index_span = index.span;
+                    let ExprKind::Range {
+                        start,
+                        end,
+                        inclusive,
+                    } = index.kind
+                    else {
+                        unreachable!("range was checked above");
+                    };
+
+                    let callee = Expr {
+                        kind: ExprKind::Member {
+                            target: Box::new(expression),
+                            member: "slice".to_owned(),
+                        },
+                        span: index_span,
+                    };
+                    let end = if inclusive {
+                        let end_span = end.span;
+                        Expr {
+                            kind: ExprKind::Binary {
+                                operator: BinaryOp::Add,
+                                left: end,
+                                right: Box::new(Expr {
+                                    kind: ExprKind::Literal(Literal::Integer("1".to_owned())),
+                                    span: Span::new(end_span.end, end_span.end),
+                                }),
+                            },
+                            span: end_span,
+                        }
+                    } else {
+                        *end
+                    };
+                    expression = Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(callee),
+                            arguments: vec![*start, end],
+                        },
+                        span,
+                    };
+                } else {
+                    expression = Expr {
+                        kind: ExprKind::Index {
+                            target: Box::new(expression),
+                            index: Box::new(index),
+                        },
+                        span,
+                    };
+                }
                 continue;
             }
 
@@ -2116,6 +2342,101 @@ impl Parser {
         expression
     }
 
+    fn parse_lambda(&mut self) -> Expr {
+        let start = self.bump().span.start;
+        self.expect_punct(Punctuation::LParen, "'('");
+        let mut parameters = Vec::new();
+        if !self.at_punct(Punctuation::RParen) {
+            loop {
+                let token = self.peek().clone();
+                let name = if self.at(TokenKind::Identifier) {
+                    self.bump().text
+                } else {
+                    self.error_current(
+                        EXPECTED,
+                        "Expected a lambda parameter name.",
+                        "Write fn(name) => expression.",
+                    );
+                    String::new()
+                };
+                let ty = if self.eat_punct(Punctuation::Colon) {
+                    Some(self.parse_type())
+                } else {
+                    None
+                };
+                parameters.push(LambdaParameter {
+                    name,
+                    ty,
+                    span: token.span,
+                });
+                if !self.eat_punct(Punctuation::Comma) {
+                    break;
+                }
+                self.skip_newlines();
+            }
+        }
+        self.expect_punct(Punctuation::RParen, "')'");
+        self.expect_punct(Punctuation::FatArrow, "'=>'");
+        self.skip_continuation_newlines();
+        let body = Box::new(self.parse_assignment());
+        let span = Span::new(start, body.span.end);
+        self.pending_lambda = Some(PendingLambda {
+            parameters,
+            body,
+            span,
+        });
+        Expr {
+            kind: ExprKind::Identifier("__lambda".to_owned()),
+            span,
+        }
+    }
+
+    fn lower_lambda_call(
+        &mut self,
+        lambda: PendingLambda,
+        arguments: Vec<Expr>,
+        span: Span,
+    ) -> Expr {
+        let mut statements = Vec::new();
+        let body = lambda.body;
+        let body_span = body.span;
+        let arity = lambda.parameters.len();
+        if arguments.len() != arity {
+            self.error(
+                EXPECTED,
+                format!(
+                    "Lambda expects {arity} argument(s), but {} were provided.",
+                    arguments.len()
+                ),
+                span,
+                "Match the lambda parameter list.",
+            );
+        }
+        for (index, parameter) in lambda.parameters.into_iter().enumerate() {
+            let value = arguments.get(index).cloned().unwrap_or(Expr {
+                kind: ExprKind::Literal(Literal::Unit),
+                span: parameter.span,
+            });
+            statements.push(Stmt {
+                kind: StmtKind::Let {
+                    mutable: false,
+                    name: parameter.name,
+                    ty: parameter.ty,
+                    value,
+                },
+                span: parameter.span,
+            });
+        }
+        statements.push(Stmt {
+            kind: StmtKind::Expr(*body),
+            span: body_span,
+        });
+        Expr {
+            kind: ExprKind::Block(Block { statements, span }),
+            span,
+        }
+    }
+
     fn parse_primary(&mut self) -> Expr {
         let token = self.peek().clone();
         let start = token.span.start;
@@ -2160,6 +2481,20 @@ impl Parser {
                 };
                 Expr {
                     kind: ExprKind::Literal(Literal::Bytes(value)),
+                    span: token.span,
+                }
+            }
+            TokenKind::Character => {
+                self.bump();
+                let value = match decode_char_literal(&token.text) {
+                    Ok(value) => value,
+                    Err(message) => {
+                        self.error(INVALID, message, token.span, "Fix the character literal.");
+                        '\0'
+                    }
+                };
+                Expr {
+                    kind: ExprKind::Literal(Literal::Character(value)),
                     span: token.span,
                 }
             }
@@ -2208,6 +2543,7 @@ impl Parser {
             TokenKind::Keyword(Keyword::Abort) => {
                 self.parse_message_expression(|message| ExprKind::Abort { message })
             }
+            TokenKind::Keyword(Keyword::Fn) if self.edition == Edition::V0_2 => self.parse_lambda(),
             _ => {
                 let (message, hint) =
                     if self.edition == Edition::V0_2 && is_binary_operator_token(&token.kind) {
@@ -2250,6 +2586,11 @@ impl Parser {
         }
 
         let first = self.parse_expression();
+        if matches!(&first.kind, ExprKind::Identifier(name) if name == "__lambda")
+            && let Some(lambda) = self.pending_lambda.as_mut()
+        {
+            lambda.span = Span::new(start, lambda.span.end);
+        }
         self.skip_newlines();
 
         if self.eat_punct(Punctuation::Comma) {
@@ -2395,6 +2736,25 @@ impl Parser {
 
     fn parse_if_expression(&mut self) -> Expr {
         let start = self.bump().span.start;
+
+        if self.edition == Edition::V0_2 && self.at_keyword(Keyword::Let) {
+            self.bump();
+            let pattern = self.parse_pattern();
+            self.expect_punct(Punctuation::Eq, "'='");
+            let value = self.parse_expression();
+            let then_branch = self.parse_block();
+            let else_branch = if self.eat_keyword(Keyword::Else) {
+                if self.at_keyword(Keyword::If) {
+                    Some(ElseBranch::If(Box::new(self.parse_if_expression())))
+                } else {
+                    Some(ElseBranch::Block(self.parse_block()))
+                }
+            } else {
+                None
+            };
+            return self.desugar_if_let(pattern, value, then_branch, else_branch, start);
+        }
+
         let condition = self.parse_expression();
         if self.edition == Edition::V0_2 && expression_has_unparenthesized_struct_init(&condition) {
             self.error(
@@ -2422,6 +2782,94 @@ impl Parser {
                 else_branch,
             },
             span: self.span_from(start),
+        }
+    }
+
+    fn desugar_if_let(
+        &self,
+        pattern: Pattern,
+        value: Expr,
+        then_branch: Block,
+        else_branch: Option<ElseBranch>,
+        start: usize,
+    ) -> Expr {
+        let span = self.span_from(start);
+        let else_body = match else_branch {
+            Some(ElseBranch::Block(block)) => MatchArmBody::Block(block),
+            Some(ElseBranch::If(expression)) => MatchArmBody::Expr(*expression),
+            None => MatchArmBody::Expr(Expr {
+                kind: ExprKind::Literal(Literal::Unit),
+                span,
+            }),
+        };
+        let arms = vec![
+            MatchArm {
+                pattern,
+                body: MatchArmBody::Block(then_branch),
+                span,
+            },
+            MatchArm {
+                pattern: Pattern {
+                    kind: PatternKind::Wildcard,
+                    span,
+                },
+                body: else_body,
+                span,
+            },
+        ];
+        Expr {
+            kind: ExprKind::Match {
+                value: Box::new(value),
+                arms,
+            },
+            span,
+        }
+    }
+
+    fn desugar_while_let(&self, pattern: Pattern, value: Expr, body: Block, start: usize) -> Stmt {
+        let span = self.span_from(start);
+        let match_expression = Expr {
+            kind: ExprKind::Match {
+                value: Box::new(value),
+                arms: vec![
+                    MatchArm {
+                        pattern,
+                        body: MatchArmBody::Block(body),
+                        span,
+                    },
+                    MatchArm {
+                        pattern: Pattern {
+                            kind: PatternKind::Wildcard,
+                            span,
+                        },
+                        body: MatchArmBody::Block(Block {
+                            statements: vec![Stmt {
+                                kind: StmtKind::Break,
+                                span,
+                            }],
+                            span,
+                        }),
+                        span,
+                    },
+                ],
+            },
+            span,
+        };
+        Stmt {
+            kind: StmtKind::While {
+                condition: Expr {
+                    kind: ExprKind::Literal(Literal::Bool(true)),
+                    span,
+                },
+                body: Block {
+                    statements: vec![Stmt {
+                        kind: StmtKind::Expr(match_expression),
+                        span,
+                    }],
+                    span,
+                },
+            },
+            span,
         }
     }
 
@@ -2796,6 +3244,9 @@ impl Parser {
             TokenKind::Float => Some(Literal::Float(token.text.clone())),
             TokenKind::String => decode_string_literal(&token.text).ok().map(Literal::String),
             TokenKind::ByteString => decode_byte_literal(&token.text).ok().map(Literal::Bytes),
+            TokenKind::Character => decode_char_literal(&token.text)
+                .ok()
+                .map(Literal::Character),
             TokenKind::Keyword(Keyword::True) => Some(Literal::Bool(true)),
             TokenKind::Keyword(Keyword::False) => Some(Literal::Bool(false)),
             _ => None,
@@ -2916,6 +3367,17 @@ impl Parser {
                 kind: TypeKind::Path(self.parse_type_path()),
                 span: self.span_from(start),
             },
+            TokenKind::Keyword(Keyword::Char) if self.edition == Edition::V0_2 => {
+                self.bump();
+                Type {
+                    kind: TypeKind::Path(TypePath {
+                        segments: vec!["char".to_owned()],
+                        arguments: Vec::new(),
+                        span: token.span,
+                    }),
+                    span: token.span,
+                }
+            }
             _ => {
                 self.error(
                     INVALID_TYPE,
@@ -3344,6 +3806,9 @@ fn is_binary_operator_token(kind: &TokenKind) -> bool {
                 | Punctuation::Gt
                 | Punctuation::GtEq
                 | Punctuation::AmpAmp
+                | Punctuation::Amp
+                | Punctuation::Pipe
+                | Punctuation::Caret
                 | Punctuation::PipePipe
                 | Punctuation::Eq
         )

@@ -70,6 +70,7 @@ extern void astra_print_isize(intptr_t x);
 extern void astra_print_f32(float x);
 extern void astra_print_f64(double x);
 extern void astra_print_bool(bool x);
+extern void astra_print_char(uint32_t code_point);
 extern void astra_print_str(NS_Str x);
 extern void astra_print_bytes(NS_Bytes x);
 extern void astra_print_unit(void);
@@ -87,6 +88,7 @@ extern void astra_println_isize(intptr_t x);
 extern void astra_println_f32(float x);
 extern void astra_println_f64(double x);
 extern void astra_println_bool(bool x);
+extern void astra_println_char(uint32_t code_point);
 extern void astra_println_str(NS_Str x);
 extern void astra_println_bytes(NS_Bytes x);
 extern void astra_println_unit(void);
@@ -136,6 +138,7 @@ extern size_t astra_gc_poison_count(void);
 extern NS_Array astra_array_new_lit(size_t n, size_t elem_size, const void* src, const NS_Gc_Shape* shape);
 extern void astra_array_push(NS_Array* arr, size_t elem_size, const void* value, const NS_Gc_Shape* shape);
 extern void* astra_array_index(NS_Array* arr, size_t i, size_t elem_size);
+extern NS_Array astra_array_slice(NS_Array arr, size_t start, size_t end, size_t elem_size, const NS_Gc_Shape* shape);
 
 extern size_t astra_str_len(NS_Str s);
 extern bool astra_str_is_empty(NS_Str s);
@@ -282,6 +285,33 @@ void astra_print_isize(intptr_t x) { printf("%td", x); }
 void astra_print_f32(float x) { astra_write_f32(x); }
 void astra_print_f64(double x) { astra_write_f64(x); }
 void astra_print_bool(bool x) { fputs(x ? "true" : "false", stdout); }
+void astra_print_char(uint32_t code_point) {
+    unsigned char bytes[4];
+    size_t length = 0;
+    if (code_point <= 0x7F) {
+        bytes[0] = (unsigned char)code_point;
+        length = 1;
+    } else if (code_point <= 0x7FF) {
+        bytes[0] = (unsigned char)(0xC0 | (code_point >> 6));
+        bytes[1] = (unsigned char)(0x80 | (code_point & 0x3F));
+        length = 2;
+    } else if (code_point <= 0xFFFF && !(code_point >= 0xD800 && code_point <= 0xDFFF)) {
+        bytes[0] = (unsigned char)(0xE0 | (code_point >> 12));
+        bytes[1] = (unsigned char)(0x80 | ((code_point >> 6) & 0x3F));
+        bytes[2] = (unsigned char)(0x80 | (code_point & 0x3F));
+        length = 3;
+    } else if (code_point <= 0x10FFFF) {
+        bytes[0] = (unsigned char)(0xF0 | (code_point >> 18));
+        bytes[1] = (unsigned char)(0x80 | ((code_point >> 12) & 0x3F));
+        bytes[2] = (unsigned char)(0x80 | ((code_point >> 6) & 0x3F));
+        bytes[3] = (unsigned char)(0x80 | (code_point & 0x3F));
+        length = 4;
+    } else {
+        fputs("\xEF\xBF\xBD", stdout);
+        return;
+    }
+    fwrite(bytes, 1, length, stdout);
+}
 void astra_print_str(NS_Str x) { astra_write_str(x); }
 void astra_print_bytes(NS_Bytes x) {
     for (size_t i = 0; i < x.len; i++) { printf("%02x", x.data[i]); }
@@ -301,6 +331,7 @@ void astra_println_isize(intptr_t x) { astra_print_isize(x); putchar('\n'); }
 void astra_println_f32(float x) { astra_print_f32(x); putchar('\n'); }
 void astra_println_f64(double x) { astra_print_f64(x); putchar('\n'); }
 void astra_println_bool(bool x) { astra_print_bool(x); putchar('\n'); }
+void astra_println_char(uint32_t code_point) { astra_print_char(code_point); putchar('\n'); }
 void astra_println_str(NS_Str x) { astra_print_str(x); putchar('\n'); }
 void astra_println_bytes(NS_Bytes x) { astra_print_bytes(x); putchar('\n'); }
 void astra_println_unit(void) { astra_print_unit(); putchar('\n'); }
@@ -1112,6 +1143,19 @@ void astra_array_push(NS_Array* arr, size_t elem_size, const void* value, const 
 void* astra_array_index(NS_Array* arr, size_t i, size_t elem_size) {
     if (i >= arr->len) { astra_panic("array index out of bounds"); }
     return (char*)arr->data + i * elem_size;
+}
+
+NS_Array astra_array_slice(NS_Array arr, size_t start, size_t end, size_t elem_size, const NS_Gc_Shape* shape) {
+    if (start > end || end > arr.len) { astra_panic("array slice range out of bounds"); }
+    if (elem_size == 0) { elem_size = 1; }
+    NS_Array out;
+    out.len = end - start;
+    out.cap = out.len == 0 ? 1 : out.len;
+    out.data = astra_gc_alloc(shape, out.cap * elem_size);
+    if (out.len > 0) {
+        memcpy(out.data, (char*)arr.data + start * elem_size, out.len * elem_size);
+    }
+    return out;
 }
 
 size_t astra_str_len(NS_Str s) { return s.len; }

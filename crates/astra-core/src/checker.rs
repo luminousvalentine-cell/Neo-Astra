@@ -4,6 +4,7 @@ use crate::ast;
 use crate::diagnostic::Diagnostic;
 use crate::edition::Edition;
 use crate::hir;
+use crate::literal::{float_suffix, integer_suffix};
 use crate::mode::Mode;
 use crate::parser::{ParseOptions, parse_with_options};
 use crate::resolver::resolve_module;
@@ -1710,11 +1711,13 @@ impl<'a> Checker<'a> {
             | Type::Bool
             | Type::Str
             | Type::Bytes
+            | Type::Char
             | Type::Unit => true,
             Type::Option(inner) => self.is_boundary_safe(inner),
-            Type::Array(inner) | Type::Slice(inner) | Type::FixedArray(inner, _) => {
-                self.is_boundary_safe(inner)
-            }
+            Type::Array(inner)
+            | Type::Slice(inner)
+            | Type::Range(inner)
+            | Type::FixedArray(inner, _) => self.is_boundary_safe(inner),
             Type::Named(name, args) => {
                 if let Some(def) = self.resolve_struct(name) {
                     def.fields.iter().all(|f| self.is_boundary_safe(&f.ty))
@@ -1837,6 +1840,9 @@ impl<'a> Checker<'a> {
             "bool" => return primitive_type(&arguments, Type::Bool, path.span, self),
             "str" => return primitive_type(&arguments, Type::Str, path.span, self),
             "bytes" => return primitive_type(&arguments, Type::Bytes, path.span, self),
+            "char" if self.options.edition == Edition::V0_2 => {
+                return primitive_type(&arguments, Type::Char, path.span, self);
+            }
             "Never" => return primitive_type(&arguments, Type::Never, path.span, self),
             "()" => return Type::Unit,
             "Option" => {
@@ -2177,7 +2183,10 @@ impl<'a> Checker<'a> {
             } => {
                 let iterable = self.check_expr(iterable, None);
                 self.report_effects(&iterable.errors);
-                let element = self.iterable_element(&iterable.ty, statement.span);
+                let element = match &iterable.ty {
+                    Type::Range(inner) => (**inner).clone(),
+                    _ => self.iterable_element(&iterable.ty, statement.span),
+                };
                 self.push_scope();
                 self.insert_local(
                     binding.clone(),
@@ -2342,6 +2351,11 @@ impl<'a> Checker<'a> {
             ast::ExprKind::Index { target, index } => {
                 self.check_index(target, index, expression.span)
             }
+            ast::ExprKind::Range {
+                start,
+                end,
+                inclusive: _,
+            } => self.check_range(start, end, expected),
             ast::ExprKind::Member { target, member } => {
                 self.check_member(target, member, expression.span, expected)
             }
@@ -2569,6 +2583,48 @@ impl<'a> Checker<'a> {
                             ),
                             span,
                             "Convert values explicitly; Neo Astra has no implicit numeric coercion.",
+                        );
+                    }
+                    return ExprInfo::value(Type::Error).with_errors(errors);
+                }
+                if !left_info.ty.accepts(&right_info.ty) && !left_info.ty.is_opaque() {
+                    self.type_mismatch(&left_info.ty, &right_info.ty, span);
+                }
+                ExprInfo::value(left_info.ty).with_errors(errors)
+            }
+            ast::BinaryOp::BitAnd
+            | ast::BinaryOp::BitOr
+            | ast::BinaryOp::BitXor
+            | ast::BinaryOp::Shl
+            | ast::BinaryOp::Shr => {
+                let integer_expected = expected.filter(|ty| ty.is_integer());
+                let (left_info, right_info) =
+                    if is_numeric_literal(left) && !is_numeric_literal(right) {
+                        let right_info = self.check_expr(right, integer_expected);
+                        let left_info = self.check_expr(left, Some(&right_info.ty));
+                        (left_info, right_info)
+                    } else {
+                        let left_info = self.check_expr(left, integer_expected);
+                        let right_info = self.check_expr(right, Some(&left_info.ty));
+                        (left_info, right_info)
+                    };
+                let errors = merge_effects(&left_info.errors, &right_info.errors);
+                if left_info.ty == Type::Never || right_info.ty == Type::Never {
+                    return ExprInfo {
+                        ty: Type::Never,
+                        errors,
+                    };
+                }
+                if !left_info.ty.is_integer() || !right_info.ty.is_integer() {
+                    if !left_info.ty.is_opaque() && !right_info.ty.is_opaque() {
+                        self.error(
+                            INVALID_OPERANDS,
+                            format!(
+                                "Bitwise operator requires integer operands, found '{}' and '{}'.",
+                                left_info.ty, right_info.ty
+                            ),
+                            span,
+                            "Bitwise operators are only defined for integers.",
                         );
                     }
                     return ExprInfo::value(Type::Error).with_errors(errors);
@@ -2913,6 +2969,36 @@ impl<'a> Checker<'a> {
         }
 
         (self.check_expr(callee, None), None)
+    }
+
+    fn check_range(
+        &mut self,
+        start: &ast::Expr,
+        end: &ast::Expr,
+        expected: Option<&Type>,
+    ) -> ExprInfo {
+        let start_info = self.check_expr(start, expected);
+        let end_info = self.check_expr(end, Some(&start_info.ty));
+        let element = if start_info.ty.accepts(&end_info.ty) {
+            start_info.ty.clone()
+        } else if end_info.ty.accepts(&start_info.ty) {
+            end_info.ty.clone()
+        } else {
+            self.type_mismatch(&start_info.ty, &end_info.ty, end.span);
+            Type::Error
+        };
+        if !element.is_integer() && !matches!(element, Type::Error | Type::Unknown) {
+            self.error(
+                INVALID_OPERANDS,
+                format!("Range bounds must be integers, found '{element}'."),
+                end.span,
+                "Use integer bounds such as 0..10 or 0u8..=8u8.",
+            );
+        }
+        ExprInfo {
+            ty: Type::Range(Box::new(element)),
+            errors: merge_effects(&start_info.errors, &end_info.errors),
+        }
     }
 
     fn check_index(&mut self, target: &ast::Expr, index: &ast::Expr, span: Span) -> ExprInfo {
@@ -3587,11 +3673,56 @@ impl<'a> Checker<'a> {
             return ExprInfo::value(Type::Error);
         };
 
-        if !check_arity(&struct_def.type_parameters, &arguments, &name, span, self) {
+        let infer = arguments.is_empty() && !struct_def.type_parameters.is_empty();
+        let mut inferred = BTreeMap::new();
+        if infer {
+            let generics = generic_map(&struct_def.type_parameters);
+            for field in fields {
+                let Some(declared) = struct_def
+                    .fields
+                    .iter()
+                    .find(|candidate| candidate.name.as_deref() == Some(field.name.as_str()))
+                else {
+                    continue;
+                };
+                let generic_ty = declared.ty.substitute(&generics);
+                let info = self.check_expr(&field.value, None);
+                infer_substitutions(&generic_ty, &info.ty, &mut inferred);
+            }
+            for parameter in &struct_def.type_parameters {
+                if !inferred.contains_key(parameter) {
+                    self.error(
+                        INVALID_TYPE_ARGUMENT,
+                        format!("Cannot infer type parameter '{parameter}' for '{name}'."),
+                        span,
+                        "Add explicit type arguments after the struct name.",
+                    );
+                    inferred.insert(parameter.clone(), Type::Unknown);
+                }
+            }
+        } else if !check_arity(&struct_def.type_parameters, &arguments, &name, span, self) {
             return ExprInfo::value(Type::Error);
         }
 
-        let substitutions = substitutions(&struct_def.type_parameters, &arguments);
+        let substitutions = if infer {
+            inferred
+        } else {
+            substitutions(&struct_def.type_parameters, &arguments)
+        };
+        let arguments = if infer {
+            struct_def
+                .type_parameters
+                .iter()
+                .map(|parameter| {
+                    substitutions
+                        .get(parameter)
+                        .cloned()
+                        .unwrap_or(Type::Unknown)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            arguments
+        };
         let mut errors = Vec::new();
         let mut seen = BTreeSet::new();
 
@@ -3610,9 +3741,11 @@ impl<'a> Checker<'a> {
                 .find(|candidate| candidate.name.as_deref() == Some(field.name.as_str()));
             match declared {
                 Some(declared) => {
-                    let expected = declared.ty.substitute(&substitutions);
-                    let info = self.check_expr(&field.value, Some(&expected));
-                    append_effects(&mut errors, info.errors);
+                    if !infer {
+                        let expected = declared.ty.substitute(&substitutions);
+                        let info = self.check_expr(&field.value, Some(&expected));
+                        append_effects(&mut errors, info.errors);
+                    }
                 }
                 None => {
                     self.error(
@@ -3720,7 +3853,8 @@ impl<'a> Checker<'a> {
         let shape = self.match_shape(&scrutinee.ty, &effect_types);
 
         let mut coverage = Coverage::default();
-        let mut result_type: Option<Type> = expected.cloned();
+
+        let mut result_type: Option<Type> = expected.filter(|ty| !ty.is_opaque()).cloned();
         let mut diverges = !arms.is_empty();
         let mut errors = Vec::new();
 
@@ -4658,14 +4792,10 @@ impl<'a> Checker<'a> {
     ) -> Type {
         match literal {
             ast::Literal::Integer(text) => {
-                let (raw, suffix_u8) = strip_u8_suffix(text);
-                let actual = if suffix_u8 {
-                    Type::U8
-                } else if expected.is_some_and(Type::is_integer) {
-                    expected.cloned().unwrap_or(Type::I32)
-                } else {
-                    Type::I32
-                };
+                let (raw, suffix) = integer_suffix(text);
+                let actual = suffix
+                    .or_else(|| expected.filter(|ty| ty.is_integer()).cloned())
+                    .unwrap_or(Type::I32);
 
                 if let Some(value) = parse_integer(raw)
                     && !integer_fits(value, &actual)
@@ -4680,12 +4810,11 @@ impl<'a> Checker<'a> {
                 actual
             }
             ast::Literal::Float(text) => {
-                let actual = if expected.is_some_and(|ty| ty.is_float()) {
-                    expected.cloned().unwrap_or(Type::F64)
-                } else {
-                    Type::F64
-                };
-                let raw = text.replace('_', "");
+                let (suffixed, suffix) = float_suffix(text);
+                let actual = suffix
+                    .or_else(|| expected.filter(|ty| ty.is_float()).cloned())
+                    .unwrap_or(Type::F64);
+                let raw = suffixed.replace('_', "");
                 if let Ok(value) = raw.parse::<f64>()
                     && actual == Type::F32
                     && (value as f32).is_infinite()
@@ -4702,6 +4831,7 @@ impl<'a> Checker<'a> {
             }
             ast::Literal::String(_) => Type::Str,
             ast::Literal::Bytes(_) => Type::Bytes,
+            ast::Literal::Character(_) => Type::Char,
             ast::Literal::Bool(_) => Type::Bool,
             ast::Literal::Unit => Type::Unit,
         }
@@ -5053,6 +5183,12 @@ fn builtin_method(ty: &Type, member: &str) -> Option<Type> {
                     type_parameters: Vec::new(),
                     parameters: vec![Type::Usize],
                     return_type: Box::new(Type::Option(element.clone())),
+                    errors: Vec::new(),
+                },
+                "slice" => FunctionType {
+                    type_parameters: Vec::new(),
+                    parameters: vec![Type::Usize, Type::Usize],
+                    return_type: Box::new(Type::Array(element.clone())),
                     errors: Vec::new(),
                 },
                 _ => return None,
@@ -5514,16 +5650,8 @@ fn integer_literal_value(expression: &ast::Expr) -> Option<usize> {
     let ast::ExprKind::Literal(ast::Literal::Integer(text)) = &expression.kind else {
         return None;
     };
-    let (raw, _) = strip_u8_suffix(text);
+    let (raw, _) = integer_suffix(text);
     usize::try_from(parse_integer(raw)?).ok()
-}
-
-fn strip_u8_suffix(text: &str) -> (&str, bool) {
-    if let Some(raw) = text.strip_suffix("u8") {
-        (raw, true)
-    } else {
-        (text, false)
-    }
 }
 
 fn parse_integer(text: &str) -> Option<u128> {
@@ -5566,6 +5694,7 @@ fn expr_has_call(expression: &ast::Expr) -> bool {
         ast::ExprKind::Binary { left, right, .. } => expr_has_call(left) || expr_has_call(right),
         ast::ExprKind::Assign { target, value } => expr_has_call(target) || expr_has_call(value),
         ast::ExprKind::Index { target, index } => expr_has_call(target) || expr_has_call(index),
+        ast::ExprKind::Range { start, end, .. } => expr_has_call(start) || expr_has_call(end),
         ast::ExprKind::Member { target, .. } => expr_has_call(target),
         ast::ExprKind::TypeArguments { target, .. } => expr_has_call(target),
         ast::ExprKind::Propagate(inner) => expr_has_call(inner),

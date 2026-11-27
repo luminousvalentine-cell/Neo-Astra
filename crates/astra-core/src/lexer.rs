@@ -9,6 +9,7 @@ pub enum Keyword {
     Abort,
     As,
     Break,
+    Char,
     Const,
     Continue,
     Default,
@@ -48,6 +49,7 @@ impl Keyword {
             Self::Abort => "abort",
             Self::As => "as",
             Self::Break => "break",
+            Self::Char => "char",
             Self::Const => "const",
             Self::Continue => "continue",
             Self::Default => "default",
@@ -100,10 +102,13 @@ pub enum Punctuation {
     Gt,
     GtEq,
     AmpAmp,
+    Amp,
     PipePipe,
     Bang,
     Eq,
     Dot,
+    DotDot,
+    DotDotEq,
     Comma,
     Colon,
     DoubleColon,
@@ -118,6 +123,7 @@ pub enum Punctuation {
     RBrace,
     At,
     Pipe,
+    Caret,
     Question,
     Underscore,
 }
@@ -129,6 +135,7 @@ pub enum TokenKind {
     Float,
     String,
     ByteString,
+    Character,
     RawSource,
     Keyword(Keyword),
     Punct(Punctuation),
@@ -232,6 +239,7 @@ impl<'a> Lexer<'a> {
                 '#' => self.invalid_line_comment(start),
                 '-' if self.starts_with("--") => self.invalid_line_comment(start),
                 '"' => self.string(start, false),
+                '\'' if self.edition == Edition::V0_2 => self.character(start),
                 'b' if self.starts_with("b\"") => self.string(start, true),
                 '0'..='9' => self.number(start),
                 character if is_identifier_start(character) => self.identifier(start),
@@ -426,6 +434,70 @@ impl<'a> Lexer<'a> {
         );
     }
 
+    fn character(&mut self, start: usize) {
+        self.bump();
+        let mut scalars = 0_usize;
+        let mut closed = false;
+
+        while let Some(character) = self.peek() {
+            match character {
+                '\'' => {
+                    self.bump();
+                    closed = true;
+                    break;
+                }
+                '\n' | '\r' => {
+                    self.diagnostic(
+                        "NS1003",
+                        "Unterminated character literal.",
+                        "Close the literal before the end of the line.",
+                        start,
+                        self.offset,
+                    );
+                    self.skip_to_newline();
+                    return;
+                }
+                '\\' => match self.escape(false) {
+                    EscapeOutcome::Continue => scalars += 1,
+                    EscapeOutcome::Unterminated => {
+                        self.diagnostic(
+                            "NS1003",
+                            "Unterminated character literal.",
+                            "Close the literal before the end of the line.",
+                            start,
+                            self.offset,
+                        );
+                        self.skip_to_newline();
+                        return;
+                    }
+                },
+                _ => {
+                    self.bump();
+                    scalars += 1;
+                }
+            }
+        }
+
+        if !closed {
+            self.diagnostic(
+                "NS1003",
+                "Unterminated character literal.",
+                "Add a closing quote.",
+                start,
+                self.offset,
+            );
+        } else if scalars != 1 {
+            self.diagnostic(
+                "NS1002",
+                "Character literal must contain exactly one Unicode scalar value.",
+                "Use one character or one escape, such as 'a' or '\\u{1F600}'.",
+                start,
+                self.offset,
+            );
+        }
+        self.push(TokenKind::Character, start);
+    }
+
     fn escape(&mut self, is_byte: bool) -> EscapeOutcome {
         let start = self.offset;
         self.bump();
@@ -435,7 +507,7 @@ impl<'a> Lexer<'a> {
         };
 
         match escaped {
-            '\\' | '"' | 'n' | 'r' | 't' | '0' => {
+            '\\' | '"' | '\'' | 'n' | 'r' | 't' | '0' => {
                 self.bump();
                 EscapeOutcome::Continue
             }
@@ -529,7 +601,7 @@ impl<'a> Lexer<'a> {
                     self.offset,
                 );
             }
-            self.byte_suffix();
+            self.integer_suffix();
             self.push(TokenKind::Integer, start);
             return;
         }
@@ -554,7 +626,7 @@ impl<'a> Lexer<'a> {
                     self.offset,
                 );
             }
-            self.byte_suffix();
+            self.integer_suffix();
             self.push(TokenKind::Integer, start);
             return;
         }
@@ -614,23 +686,59 @@ impl<'a> Lexer<'a> {
         }
 
         if is_float {
+            if !tuple_index {
+                self.float_suffix();
+            }
             self.push(TokenKind::Float, start);
         } else {
             if !tuple_index {
-                self.byte_suffix();
+                self.integer_suffix();
             }
             self.push(TokenKind::Integer, start);
         }
     }
 
-    fn byte_suffix(&mut self) {
-        if self.starts_with("u8")
-            && self
-                .peek_n(2)
-                .is_none_or(|character| !is_identifier_continue(character))
-        {
-            self.bump();
-            self.bump();
+    fn integer_suffix(&mut self) {
+        const V02: &[&str] = &[
+            "usize", "isize", "i16", "i32", "i64", "u16", "u32", "u64", "i8", "u8",
+        ];
+        const V01: &[&str] = &["u8"];
+        let suffixes = if self.edition == Edition::V0_2 {
+            V02
+        } else {
+            V01
+        };
+        for suffix in suffixes {
+            let length = suffix.len();
+            if self.starts_with(suffix)
+                && self
+                    .peek_n(length)
+                    .is_none_or(|character| !is_identifier_continue(character))
+            {
+                for _ in 0..length {
+                    self.bump();
+                }
+                return;
+            }
+        }
+    }
+
+    fn float_suffix(&mut self) {
+        if self.edition != Edition::V0_2 {
+            return;
+        }
+        for suffix in ["f32", "f64"] {
+            let length = suffix.len();
+            if self.starts_with(suffix)
+                && self
+                    .peek_n(length)
+                    .is_none_or(|character| !is_identifier_continue(character))
+            {
+                for _ in 0..length {
+                    self.bump();
+                }
+                return;
+            }
         }
     }
 
@@ -649,7 +757,9 @@ impl<'a> Lexer<'a> {
         let kind = if text == "_" {
             TokenKind::Punct(Punctuation::Underscore)
         } else if let Some(keyword) = keyword(text) {
-            if keyword == Keyword::Fail && self.edition != Edition::V0_2 {
+            if (keyword == Keyword::Fail || keyword == Keyword::Char)
+                && self.edition != Edition::V0_2
+            {
                 TokenKind::Identifier
             } else {
                 TokenKind::Keyword(keyword)
@@ -829,11 +939,26 @@ impl<'a> Lexer<'a> {
                 if self.peek() == Some('&') {
                     self.bump();
                     one(self, Punctuation::AmpAmp);
+                } else if self.edition == Edition::V0_2 {
+                    one(self, Punctuation::Amp);
                 } else {
                     self.diagnostic(
                         "NS1005",
                         "Unexpected character '&'.",
                         "Use && for logical and.",
+                        start,
+                        self.offset,
+                    );
+                }
+            }
+            '^' => {
+                if self.edition == Edition::V0_2 {
+                    one(self, Punctuation::Caret);
+                } else {
+                    self.diagnostic(
+                        "NS1005",
+                        "Unexpected character '^'.",
+                        "Bitwise xor is available in edition 0.2.",
                         start,
                         self.offset,
                     );
@@ -847,7 +972,19 @@ impl<'a> Lexer<'a> {
                     one(self, Punctuation::Pipe);
                 }
             }
-            '.' => one(self, Punctuation::Dot),
+            '.' => {
+                if self.edition == Edition::V0_2 && self.peek() == Some('.') {
+                    self.bump();
+                    if self.peek() == Some('=') {
+                        self.bump();
+                        one(self, Punctuation::DotDotEq);
+                    } else {
+                        one(self, Punctuation::DotDot);
+                    }
+                } else {
+                    one(self, Punctuation::Dot);
+                }
+            }
             ',' => one(self, Punctuation::Comma),
             ':' => {
                 if self.peek() == Some(':') && self.edition == Edition::V0_2 {
@@ -923,6 +1060,7 @@ fn keyword(text: &str) -> Option<Keyword> {
         "abort" => Keyword::Abort,
         "as" => Keyword::As,
         "break" => Keyword::Break,
+        "char" => Keyword::Char,
         "const" | "constant" => Keyword::Const,
         "continue" => Keyword::Continue,
         "default" => Keyword::Default,

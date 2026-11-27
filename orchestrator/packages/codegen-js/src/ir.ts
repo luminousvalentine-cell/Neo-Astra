@@ -45,6 +45,7 @@ export type SemanticType =
   | "Bool"
   | "Str"
   | "Bytes"
+  | "Char"
   | "Unit"
   | "Never"
   | "Error"
@@ -54,6 +55,7 @@ export type SemanticType =
   | { readonly Array: SemanticType }
   | { readonly FixedArray: readonly [SemanticType, number] }
   | { readonly Slice: SemanticType }
+  | { readonly Range: SemanticType }
   | { readonly Map: readonly [SemanticType, SemanticType] }
   | { readonly Tuple: readonly SemanticType[] }
   | { readonly Function: FunctionType }
@@ -351,6 +353,13 @@ export type ExprKind =
       };
     }
   | {
+      readonly Range: {
+        readonly start: Expr;
+        readonly end: Expr;
+        readonly inclusive: boolean;
+      };
+    }
+  | {
       readonly Member: {
         readonly target: Expr;
         readonly member: string;
@@ -417,7 +426,12 @@ export type BinaryOp =
   | "Greater"
   | "GreaterEqual"
   | "And"
-  | "Or";
+  | "Or"
+  | "BitAnd"
+  | "BitOr"
+  | "BitXor"
+  | "Shl"
+  | "Shr";
 
 export interface MapEntry {
   readonly key: Expr;
@@ -474,6 +488,7 @@ export type Literal =
   | { readonly Float: string }
   | { readonly String: string }
   | { readonly Bytes: readonly number[] }
+  | { readonly Character: string }
   | { readonly Bool: boolean }
   | "Unit";
 

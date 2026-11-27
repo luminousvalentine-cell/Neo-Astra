@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "astra-capabilities"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "astra-core",
  "serde",
@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "astra-cli"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "astra-capabilities",
  "astra-compiler-api",
@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "astra-codegen-c"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "astra-capabilities",
  "astra-compiler-api",
@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "astra-compiler-api"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "astra-capabilities",
  "astra-codegen-c",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "astra-core"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "astra-lsp"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "astra-capabilities",
  "astra-compiler-api",
@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "astra-manifest"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "astra-core",
  "serde",
@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "astra-nopm"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "astra-toolchain",
  "base64",
@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "astra-nova"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "astra-capabilities",
  "astra-core",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "astra-toolchain"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "astra-wasm"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "astra-compiler-api",
 ]

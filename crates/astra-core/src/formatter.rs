@@ -809,6 +809,15 @@ impl<'a> Formatter<'a> {
                 self.write_expr(index, 0);
                 self.output.push(']');
             }
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                self.write_expr(start, 0);
+                self.output.push_str(if *inclusive { "..=" } else { ".." });
+                self.write_expr(end, 0);
+            }
             ExprKind::Member { target, member } => {
                 self.write_expr(target, precedence);
                 self.output.push('.');
@@ -996,9 +1005,28 @@ impl<'a> Formatter<'a> {
             Literal::Integer(value) | Literal::Float(value) => self.output.push_str(value),
             Literal::String(value) => self.write_string(value),
             Literal::Bytes(value) => self.write_bytes(value),
+            Literal::Character(value) => self.write_char(*value),
             Literal::Bool(value) => self.output.push_str(if *value { "true" } else { "false" }),
             Literal::Unit => self.output.push_str("()"),
         }
+    }
+
+    fn write_char(&mut self, value: char) {
+        self.output.push('\'');
+        match value {
+            '\\' => self.output.push_str("\\\\"),
+            '\'' => self.output.push_str("\\'"),
+            '\n' => self.output.push_str("\\n"),
+            '\r' => self.output.push_str("\\r"),
+            '\t' => self.output.push_str("\\t"),
+            '\0' => self.output.push_str("\\0"),
+            character if character.is_control() => {
+                self.output
+                    .push_str(&format!("\\u{{{:X}}}", character as u32));
+            }
+            character => self.output.push(character),
+        }
+        self.output.push('\'');
     }
 
     fn write_string(&mut self, value: &str) {
@@ -1295,21 +1323,25 @@ fn expression_precedence(kind: &ExprKind) -> u8 {
             BinaryOp::And => 3,
             BinaryOp::Equal | BinaryOp::NotEqual => 4,
             BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => 5,
-            BinaryOp::Add | BinaryOp::Subtract | BinaryOp::AddWrap | BinaryOp::SubtractWrap => 6,
+            BinaryOp::BitOr => 6,
+            BinaryOp::BitXor => 7,
+            BinaryOp::BitAnd => 8,
+            BinaryOp::Shl | BinaryOp::Shr => 9,
+            BinaryOp::Add | BinaryOp::Subtract | BinaryOp::AddWrap | BinaryOp::SubtractWrap => 10,
             BinaryOp::Multiply
             | BinaryOp::Divide
             | BinaryOp::Remainder
             | BinaryOp::MultiplyWrap
-            | BinaryOp::DivideWrap => 7,
+            | BinaryOp::DivideWrap => 11,
         },
-        ExprKind::Unary { .. } => 8,
+        ExprKind::Unary { .. } => 12,
         ExprKind::Call { .. }
         | ExprKind::Index { .. }
         | ExprKind::Member { .. }
         | ExprKind::TypeArguments { .. }
         | ExprKind::Propagate(_)
-        | ExprKind::StructInit { .. } => 9,
-        _ => 10,
+        | ExprKind::StructInit { .. } => 13,
+        _ => 14,
     }
 }
 
@@ -1332,5 +1364,10 @@ fn binary_operator(operator: BinaryOp) -> &'static str {
         BinaryOp::GreaterEqual => ">=",
         BinaryOp::And => "&&",
         BinaryOp::Or => "||",
+        BinaryOp::BitAnd => "&",
+        BinaryOp::BitOr => "|",
+        BinaryOp::BitXor => "^",
+        BinaryOp::Shl => "<<",
+        BinaryOp::Shr => ">>",
     }
 }

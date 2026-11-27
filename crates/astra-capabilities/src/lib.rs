@@ -813,6 +813,11 @@ impl Analyzer {
                 usage.join(self.walk_expr(index, explicit));
                 usage
             }
+            ast::ExprKind::Range { start, end, .. } => {
+                let mut usage = self.walk_expr(start, explicit);
+                usage.join(self.walk_expr(end, explicit));
+                usage
+            }
             ast::ExprKind::Member { target, .. } => self.walk_expr(target, explicit),
             ast::ExprKind::TypeArguments { target, .. } => self.walk_expr(target, explicit),
             ast::ExprKind::Propagate(inner) => self.walk_expr(inner, explicit),

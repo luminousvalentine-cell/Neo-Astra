@@ -266,6 +266,10 @@ fn migrate_expr(expression: &Expr, source: &str, edits: &mut Vec<Edit>) {
             migrate_expr(target, source, edits);
             migrate_expr(index, source, edits);
         }
+        ExprKind::Range { start, end, .. } => {
+            migrate_expr(start, source, edits);
+            migrate_expr(end, source, edits);
+        }
         ExprKind::Member { target, .. } => migrate_expr(target, source, edits),
         ExprKind::TypeArguments { target, .. } => {
             let text = &source[expression.span.start..expression.span.end];

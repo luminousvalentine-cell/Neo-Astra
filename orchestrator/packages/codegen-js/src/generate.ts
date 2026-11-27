@@ -163,6 +163,7 @@ const HELPER_ORDER = [
   "strSlice",
   "bytesNew",
   "byteSlice",
+  "arraySlice",
   "index",
   "indexSet",
   "getArray",
@@ -225,6 +226,7 @@ const HELPER_DEPENDENCIES: Partial<Record<HelperName, readonly HelperName[]>> = 
   charAt: ["some", "none"],
   strSlice: ["ok", "err"],
   byteSlice: ["panic"],
+  arraySlice: ["panic"],
   indexSet: ["panic"],
   channel: ["ok", "err", "panic"],
   lenBig: ["panic"],
@@ -578,6 +580,14 @@ const HELPERS: Record<HelperName, readonly string[]> = {
     "  const from = Number(start);",
     "  const to = Number(end);",
     "  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from || to > value.length) $panic(`bytes slice ${from}..${to} is out of bounds`);",
+    "  return value.slice(from, to);",
+    "}",
+  ],
+  arraySlice: [
+    "function $arraySlice(value, start, end) {",
+    "  const from = Number(start);",
+    "  const to = Number(end);",
+    "  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from || to > value.length) $panic(`array slice ${from}..${to} is out of bounds`);",
     "  return value.slice(from, to);",
     "}",
   ],
@@ -998,6 +1008,7 @@ const TS_HELPER_SIGNATURES: Partial<Record<HelperName, string>> = {
   strSlice: "function $strSlice(value: string, start: number | bigint, end: number | bigint): { readonly $result: true; readonly ok: true; readonly value: string } | { readonly $result: true; readonly ok: false; readonly error: SliceError } {",
   bytesNew: "function $bytesNew(length: number | bigint): Uint8Array {",
   byteSlice: "function $byteSlice(value: Uint8Array, start: number | bigint, end: number | bigint): Uint8Array {",
+  arraySlice: "function $arraySlice<T>(value: readonly T[], start: number | bigint, end: number | bigint): T[] {",
   index: "function $index<T>(value: readonly T[] | ArrayLike<T>, index: number | bigint): T {",
   indexSet: "function $indexSet<T>(value: T[] | { length: number; [n: number]: T }, index: number | bigint, item: T): T {",
   getArray: "function $getArray<T>(value: readonly T[], index: number | bigint): { readonly $option: true; readonly value: T } | { readonly $option: false } {",
@@ -2673,6 +2684,25 @@ class JavaScriptGenerator {
           iterable: Expr;
           body: Block;
         }>(kind, "For");
+        if (variantOf(data.iterable.kind) === "Range") {
+          const range = structPayload<{
+            start: Expr;
+            end: Expr;
+            inclusive: boolean;
+          }>(data.iterable.kind, "Range");
+          const start = this.emitExpr(range.start);
+          const end = this.emitExpr(range.end);
+          const counter = this.temporary("range");
+          const limit = this.temporary("rangeEnd");
+          const comparison = range.inclusive ? "<=" : "<";
+          const body = this.emitLoopBody(data.body);
+          const binding = jsName(data.binding);
+          const boundBody = body.replace(
+            /^\{\n?/,
+            (opening) => `${opening}    const ${binding} = ${counter};\n`,
+          );
+          return `{\n  const ${limit} = ${end};\n  for (let ${counter} = ${start}; ${counter} ${comparison} ${limit}; ${counter} += 1) ${boundBody}\n}`;
+        }
         const iterable = this.emitIterable(data.iterable);
         const body = this.emitLoopBody(data.body);
         return `for (const ${jsName(data.binding)} of ${iterable}) ${body}`;
@@ -2782,6 +2812,12 @@ class JavaScriptGenerator {
         const data = structPayload<{ target: Expr; index: Expr }>(kind, "Index");
         return this.emitIndex(data.target, data.index);
       }
+      case "Range":
+        this.unsupported(
+          expression.span,
+          "range values are only supported as a for-loop iterable",
+        );
+        return "0";
       case "Member": {
         const data = structPayload<{ target: Expr; member: string }>(kind, "Member");
         return this.emitMember(data.target, data.member);
@@ -2968,7 +3004,7 @@ class JavaScriptGenerator {
         return value;
       }
       case "Float": {
-        const raw = stripUnderscores(String(payloadOf(literal)));
+        const raw = stripFloatSuffix(String(payloadOf(literal)));
         const type = this.typeAt(span);
         this.useHelper("float");
         if (type !== undefined && typeTag(type) === "F32") {
@@ -2982,6 +3018,8 @@ class JavaScriptGenerator {
         const bytes = payloadOf(literal) as readonly number[];
         return `new Uint8Array([${bytes.join(", ")}])`;
       }
+      case "Character":
+        return JSON.stringify(String(payloadOf(literal)));
       case "Bool":
         return payloadOf(literal) === true ? "true" : "false";
       case "Unit":
@@ -3097,7 +3135,13 @@ class JavaScriptGenerator {
       (INTEGER_TAGS.has(tag) ||
         (this.ir.integerPolicy === "arbitrary" && USIZE_TAGS.has(tag)))
     ) {
-      const wrap = data.operator.endsWith("Wrap");
+      const wrap =
+        data.operator.endsWith("Wrap") ||
+        data.operator === "BitAnd" ||
+        data.operator === "BitOr" ||
+        data.operator === "BitXor" ||
+        data.operator === "Shl" ||
+        data.operator === "Shr";
       const operator = data.operator.replace(/Wrap$/, "");
       return this.emitIntegerBinary(tag, operator, left, right, wrap, span);
     }
@@ -3194,6 +3238,21 @@ class JavaScriptGenerator {
           this.useHelper("rem");
           raw = `$rem(${left}, ${right})`;
         }
+        break;
+      case "BitAnd":
+        raw = `(${left} & ${right})`;
+        break;
+      case "BitOr":
+        raw = `(${left} | ${right})`;
+        break;
+      case "BitXor":
+        raw = `(${left} ^ ${right})`;
+        break;
+      case "Shl":
+        raw = `(${left} << ${right})`;
+        break;
+      case "Shr":
+        raw = `(${left} >> ${right})`;
         break;
       default:
         this.unsupported(span, `Unsupported integer operator '${operator}'.`);
@@ -3417,6 +3476,11 @@ class JavaScriptGenerator {
 
       this.useHelper("byteSlice");
       return `$byteSlice(${target}, ${args[0] ?? "0"}, ${args[1] ?? "0"})`;
+    }
+    if ((tag === "Array" || tag === "Slice") && method === "slice") {
+
+      this.useHelper("arraySlice");
+      return `$arraySlice(${target}, ${args[0] ?? "0"}, ${args[1] ?? "0"})`;
     }
     if (tag === "Str") {
       switch (method) {
@@ -4302,6 +4366,7 @@ function astTypeToTs(
         case "bool":
           return "boolean";
         case "str":
+        case "char":
           return "string";
         case "bytes":
           return "Uint8Array";
@@ -4354,6 +4419,7 @@ function semanticTypeToTs(
       case "Bool":
         return "boolean";
       case "Str":
+      case "Char":
         return "string";
       case "Bytes":
         return "Uint8Array";
@@ -4386,6 +4452,10 @@ function semanticTypeToTs(
     case "Array":
     case "Slice":
       return `${semanticTypeToTs(payload as SemanticType, policy, optionStyle)}[]`;
+    case "Range": {
+      const element = semanticTypeToTs(payload as SemanticType, policy, optionStyle);
+      return `readonly [${element}, ${element}]`;
+    }
     case "FixedArray": {
       const [element] = payload as readonly [SemanticType, number];
       return `${semanticTypeToTs(element ?? "Unknown", policy, optionStyle)}[]`;
@@ -4818,9 +4888,36 @@ function stripUnderscores(value: string): string {
   return value.replaceAll("_", "");
 }
 
+const INTEGER_SUFFIXES = [
+  "usize",
+  "isize",
+  "i16",
+  "i32",
+  "i64",
+  "u16",
+  "u32",
+  "u64",
+  "i8",
+  "u8",
+] as const;
+
+const FLOAT_SUFFIXES = ["f32", "f64"] as const;
+
+function stripSuffix(value: string, suffixes: readonly string[]): string {
+  for (const suffix of suffixes) {
+    if (value.endsWith(suffix) && value.length > suffix.length) {
+      return value.slice(0, -suffix.length);
+    }
+  }
+  return value;
+}
+
 function stripIntegerSuffix(value: string): string {
-  const withoutSuffix = value.endsWith("u8") ? value.slice(0, -2) : value;
-  return stripUnderscores(withoutSuffix);
+  return stripUnderscores(stripSuffix(value, INTEGER_SUFFIXES));
+}
+
+function stripFloatSuffix(value: string): string {
+  return stripUnderscores(stripSuffix(value, FLOAT_SUFFIXES));
 }
 
 function jsName(name: string): string {

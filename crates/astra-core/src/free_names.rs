@@ -131,6 +131,10 @@ impl FreeNames {
                 self.expr(target);
                 self.expr(index);
             }
+            ExprKind::Range { start, end, .. } => {
+                self.expr(start);
+                self.expr(end);
+            }
             ExprKind::Member { target, .. } => self.expr(target),
             ExprKind::TypeArguments { target, .. } => self.expr(target),
             ExprKind::Propagate(inner) => self.expr(inner),
