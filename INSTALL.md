@@ -1,6 +1,6 @@
 # Install and upgrade
 
-Neo Astra `1.0.1` ships as a host-native package. Once it's installed, you don't need Node.js, npm, Cargo, or a source checkout to run it. There's no background service and nothing is stored globally beyond the installed commands.
+Neo Astra `1.1.2` ships as a host-native package. Once it's installed, you don't need Node.js, npm, Cargo, or a source checkout to run it. There's no background service and nothing is stored globally beyond the installed commands.
 
 ## Supported hosts
 
@@ -10,7 +10,7 @@ Neo Astra `1.0.1` ships as a host-native package. Once it's installed, you don't
 | Linux x64 | yes | `neo-astra-linux-x64` |
 | macOS arm64 | yes | `neo-astra-darwin-arm64` |
 
-Other hosts can build from source, but they aren't covered by the 1.0.1 release contract.
+Other hosts can build from source, but they aren't covered by the 1.1.2 release contract.
 
 ## Install from npm
 
@@ -47,7 +47,7 @@ Here's what's inside the archive:
 
 The binaries are compiled and stripped, so the package has no TypeScript sources, source maps, comments, or debug symbols.
 
-A `.sha256` sidecar catches corrupted downloads, but it can't prove an archive wasn't swapped out. The 1.0.1 archives include provenance attestations. When one is present, you can verify it with the GitHub CLI:
+A `.sha256` sidecar catches corrupted downloads, but it can't prove an archive wasn't swapped out. The 1.1.2 archives include provenance attestations. When one is present, you can verify it with the GitHub CLI:
 
 ```sh
 gh attestation verify neo-astra-*.tar.gz --repo luminousvalentine-cell/Neo-Astra
@@ -128,4 +128,4 @@ With an archive, just delete the unpacked directory. Each project keeps its own 
 | `NS9103` | `ASTRA_CC` points to something that isn't a usable C compiler. |
 | `NS4019` | A task handle would cross a task boundary as a copied value. |
 
-Remember that `app` mode is partial, and `web` and `system` are previews in 1.0. If a mode or standard-library feature isn't there, the compiler should reject it explicitly. If you hit a silent fallback or a build that succeeds when it shouldn't, please report it as a bug.
+Remember that `app` mode is partial, and `web` and `system` are previews in 1.1. If a mode or standard-library feature isn't there, the compiler should reject it explicitly. If you hit a silent fallback or a build that succeeds when it shouldn't, please report it as a bug.

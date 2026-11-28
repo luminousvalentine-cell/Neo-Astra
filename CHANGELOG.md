@@ -21,6 +21,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Native language server, phase 1: a stdio LSP with diagnostics and formatting.
 
+## [1.1.2] - 2026-11-28
+
+### Added
+
+- Edition `0.2` `if let` / `while let` desugaring, ranges (`a..b`, `a..=b`) with `for` iteration and slicing, integer bitwise operators, `char` and single-scalar literals, immediate lambdas, and the complete integer/float suffix table. Edition `0.1` is unchanged.
+- Array and slice `slice(start, end)` support across the checker and all three backends.
+
+### Fixed
+
+- Matching a value inside `println` now infers the match result from its arms instead of inheriting the builtin's opaque parameter type.
+
+## [1.1.1] - 2026-11-26
+
+### Fixed
+
+- The packaging smoke fixture uses a supported edition so the packaged `astra check` succeeds.
+
+## [1.1.0] - 2026-11-24
+
+### Added
+
+- Language edition `0.2` syntax cleanup: `fail Type(...)`, postfix `?`, `::<...>` turbofish, canonical scope blocks, canonical aliases, and a deny-by-default canonical-syntax lint.
+- Source-to-source migration core for edition `0.2`.
+
+### Changed
+
+- The formatter is edition-aware and emits canonical `0.2` spellings while preserving `0.1` spellings under edition `0.1`.
+
 ## [1.0.1] - 2026-11-22
 
 ### Added
