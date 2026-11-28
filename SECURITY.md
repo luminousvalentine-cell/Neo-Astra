@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-We ship security fixes for the current `1.0.x` release line. If you're on an older release, we may ask you to upgrade before we consider backporting a fix.
+We ship security fixes for the current `1.1.x` release line. If you're on an older release, we may ask you to upgrade before we consider backporting a fix.
 
 ## Reporting a vulnerability
 

@@ -6,28 +6,30 @@ This repo is the public source mirror. It holds the production source plus the f
 
 ## Where things stand
 
-Neo Astra `1.0.1` is out. The table below is the current support contract.
+Neo Astra `1.1.2` is out. The table below is the current support contract.
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| `core` mode | **Stable** | The only mode we call stable in 1.0. |
+| `core` mode | **Stable** | The only mode we call stable. |
 | `app` mode | **Partial** | The parts that exist work, but it isn't complete. |
 | `web` mode | **Preview** | The capability and backend pieces are there, but there's no finished library surface yet. |
 | `system` mode | **Preview** | Same story as web. |
-| `high` mode | **Planned** | Not implemented in 1.0. |
+| `high` mode | **Planned** | Not implemented in 1.1. |
 | C17 target | **Shipped** | Emits executables, static libraries, and shared libraries. |
 | JavaScript ESM target | **Shipped** | Produces readable ESM output. |
 | TypeScript ESM target | **Shipped** | Produces readable TypeScript output. |
 | Nova runtime | **Shipped** | Covers `run`, `eval`, `watch`, `repl`, and `test` during development. |
 | NoPM | **Shipped** | Package graph, lockfile, store, and source adapters. |
-| Language server (LSP) | **In progress** | Phase 1 is under construction and isn't in the 1.0 package. |
+| Language server (LSP) | **In progress** | Phase 1 is under construction and isn't in the 1.1 package. |
 | Plugin host | **Later** | Not shipped. |
 | Wasm execution backend | **Later** | Not shipped. |
 | Browser playground | **Later** | Not shipped. |
 
-The 1.0.1 release archives are built for **Windows x64**, **Linux x64**, and **macOS arm64**. Other platforms may build from source, but they aren't official release targets yet.
+The 1.1.2 release archives are built for **Windows x64**, **Linux x64**, and **macOS arm64**. Other platforms may build from source, but they aren't official release targets yet.
 
-In `1.0.1` the `astra` and `nopm` commands are native Rust binaries. `check`, `fmt`, `ast`, `explain`, `doctor`, C and native builds, and NoPM path flows need no Node.js or npm at runtime. Only JS and TypeScript builds use an isolated, on-demand Node bridge.
+In `1.1.2` the `astra` and `nopm` commands are native Rust binaries. `check`, `fmt`, `ast`, `explain`, `doctor`, C and native builds, and NoPM path flows need no Node.js or npm at runtime. Only JS and TypeScript builds use an isolated, on-demand Node bridge.
+
+Edition `0.1` remains the default and is unchanged. Edition `0.2` adds `if let` / `while let`, ranges (`a..b`, `a..=b`), integer bitwise operators, `char` literals, immediate lambdas, and the complete numeric suffix table. All are gated by the edition setting; see the language specification shipped with the release.
 
 ## Installing
 
@@ -99,9 +101,10 @@ Native builds need a C compiler on your `PATH`, or a pinned toolchain declared i
 
 If you'd rather not type it all out, a ready-to-run copy lives in [`examples/hello`](examples/hello).
 
-## What's in 1.0
+## What's in 1.1
 
 - **A statically typed frontend.** That means a lexer, parser, resolver, capability and mode inference, a type checker, error effects, and structured diagnostics.
+- **Edition `0.2` language features.** `if let` / `while let`, ranges in `for` loops and slices, bitwise integer operators, `char` and scalar literals, immediate lambdas, and the complete integer/float suffix table, all behind the edition gate.
 - **The `astra` CLI**, with `check`, `fmt`, `build`, `doctor`, `ast`, and `explain`.
 - **Four backends:** native, C, JavaScript, and TypeScript. Inline `@script:js`, `@script:ts`, `@script:c`, and `@script:cpp` blocks are emitted with boundary validation. Any other script target is rejected with a clear error.
 - **The `nova` development runtime.**
